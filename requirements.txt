@@ -1,0 +1,7 @@
+fastapi
+uvicorn
+pydantic
+python-multipart
+redis>=5.0
+slowapi>=0.1.9
+limits

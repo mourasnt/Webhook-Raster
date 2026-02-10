@@ -1,0 +1,48 @@
+services:
+  redis:
+    image: redis:7-alpine
+    container_name: raster-redis
+    restart: unless-stopped
+    # Sem "ports:" — Redis acessível APENAS na rede interna Docker
+    networks:
+      - webhook-net
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 5s
+    command: redis-server --maxmemory 128mb --maxmemory-policy allkeys-lru
+
+  webhook-api:
+    build: .
+    container_name: raster-webhook-api
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    environment:
+      - REDIS_URL=redis://redis:6379/0
+      - REDIS_RATE_LIMIT_URL=redis://redis:6379/1
+      - EVENT_TTL_SECONDS=86400
+      - RATE_LIMIT=100/minute
+      - TIMESTAMP_MAX_AGE_SECONDS=300
+      - LOG_LEVEL=INFO
+    depends_on:
+      redis:
+        condition: service_healthy
+    networks:
+      - webhook-net
+    volumes:
+      - webhook-logs:/app/logs
+
+networks:
+  webhook-net:
+    driver: bridge
+
+volumes:
+  redis-data:
+    driver: local
+  webhook-logs:
+    driver: local
