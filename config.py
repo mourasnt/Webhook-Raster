@@ -22,5 +22,21 @@ class Settings:
     # Timezone
     TIMEZONE: str = "America/Sao_Paulo"
 
+    # Postgres (async)
+    DATABASE_URL: str = os.environ.get(
+        "DATABASE_URL",
+        "postgresql+asyncpg://postgres:postgres@postgres:5432/webhooks",
+    )
+
+    # LGPD — Retenção de logs (Art. 15/16)
+    LOG_RETENTION_DAYS: int = int(os.environ.get("LOG_RETENTION_DAYS", "30"))
+
+    # LGPD — Audit trail (Art. 37)
+    AUDIT_LOG_FILE: str = os.environ.get("AUDIT_LOG_FILE", "logs/audit.json")
+
+    # LGPD — Chave de criptografia Fernet (Art. 46)
+    # Gerar com: python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
+    ENCRYPTION_KEY: str = os.environ.get("ENCRYPTION_KEY", "")
+
 
 settings = Settings()

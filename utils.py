@@ -3,6 +3,8 @@ import logging
 from pathlib import Path
 from typing import Any, Dict, Optional
 
+from lgpd import sanitize_payload
+
 # Definir caminho para logs
 LOGS_DIR = Path(__file__).parent / "logs"
 LOGS_DIR.mkdir(exist_ok=True)
@@ -41,12 +43,15 @@ def save_webhook_log(
         if not log_file:
             return False
 
+        # LGPD: sanitizar dados pessoais antes de persistir
+        safe_payload = sanitize_payload(payload)
+
         log_entry = {
             "received_at": received_at,
             "event_id": event_id,
             "webhook_type": webhook_type,
             "url": url,
-            "payload": payload,
+            "payload": safe_payload,
         }
 
         # Append ao arquivo (JSON Lines format — um objeto JSON por linha)

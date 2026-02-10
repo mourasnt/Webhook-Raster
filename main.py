@@ -1,15 +1,27 @@
 from contextlib import asynccontextmanager
+import asyncio
 import logging
 from typing import Dict, Any
+from datetime import datetime
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse
-from slowapi import Limiter, _rate_limit_exceeded_handler
+from slowapi import Limiter
 from slowapi.errors import RateLimitExceeded
 from slowapi.middleware import SlowAPIMiddleware
 from slowapi.util import get_remote_address
 
+from audit import log_audit_event
 from config import settings
+from db import get_async_session, init_db, shutdown_db, startup_db
+import db_models
+from db_repository import (
+    list_all_cpfs,
+    list_all_placas,
+    save_webhook_event,
+    search_by_cpf,
+    search_by_placa,
+)
 from dependencies import startup_redis, shutdown_redis
 from middleware import IdempotencyMiddleware
 from models import (
@@ -17,8 +29,9 @@ from models import (
     ResultadoChecklistWebhookRequest,
     PesquisaConsultaWebhookRequest,
 )
-from security import now_sp_str
-from utils import save_webhook_log, get_webhook_logs
+from retention import retention_background_task
+from security import now_sp, now_sp_str
+from utils import save_webhook_log
 
 # ──────────────────────────────────────────────────────────────────
 # Logging
@@ -43,11 +56,26 @@ limiter = Limiter(
 # ──────────────────────────────────────────────────────────────────
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """Gerencia ciclo de vida: conecta/desconecta Redis."""
+    """Gerencia ciclo de vida: conecta/desconecta Redis + retention task."""
     await startup_redis()
-    logger.info("Lifecycle → startup concluído")
+    await startup_db()
+    await init_db()
+
+    # Iniciar background task de expurgo (LGPD Art. 15/16)
+    retention_task = asyncio.create_task(retention_background_task())
+    logger.info("Lifecycle → startup concluído (retenção LGPD ativa)")
+
     yield
+
+    # Cancelar task de retenção
+    retention_task.cancel()
+    try:
+        await retention_task
+    except asyncio.CancelledError:
+        pass
+
     await shutdown_redis()
+    await shutdown_db()
     logger.info("Lifecycle → shutdown concluído")
 
 # ──────────────────────────────────────────────────────────────────
@@ -57,16 +85,36 @@ app = FastAPI(
     title="Webhook API - RasterIntegra",
     description=(
         "API para receber webhooks de Checklist, Resultado de Checklist "
-        "e Pesquisa/Consulta — com proteção contra replay, idempotência "
-        "e rate limiting."
+        "e Pesquisa/Consulta — com proteção contra replay, idempotência, "
+        "rate limiting e conformidade LGPD."
     ),
-    version="2.0.0",
+    version="2.1.0",
     lifespan=lifespan,
 )
 
+# ──────────────────────────────────────────────────────────────────
+# Rate Limit exceeded handler com audit trail (LGPD Art. 37)
+# ──────────────────────────────────────────────────────────────────
+async def rate_limit_exceeded_handler(request: Request, exc: RateLimitExceeded):
+    """Handler customizado para 429 com registro de auditoria."""
+    source_ip = request.client.host if request.client else None
+    log_audit_event(
+        action="RATE_LIMITED",
+        details={
+            "path": str(request.url.path),
+            "limit": str(exc.detail) if hasattr(exc, "detail") else "rate limit exceeded",
+        },
+        source_ip=source_ip,
+    )
+    return JSONResponse(
+        status_code=429,
+        content={"detail": "Rate limit excedido. Tente novamente em breve."},
+    )
+
+
 # Registrar rate limiter
 app.state.limiter = limiter
-app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+app.add_exception_handler(RateLimitExceeded, rate_limit_exceeded_handler)
 
 # Middlewares (ordem inversa de execução: último adicionado executa primeiro)
 # 1) SlowAPI → avalia rate limit antes de tudo
@@ -102,6 +150,7 @@ async def receive_webhook(request: Request):
     - Idempotência via SHA256 do body (Redis, TTL 24 h)
     - Rate limiting global por IP (100 req/min padrão)
     - Validação de timestamp quando presente no payload
+    - Criptografia de dados pessoais nos logs (LGPD)
     """
     try:
         body = await request.json()
@@ -125,16 +174,26 @@ async def receive_webhook(request: Request):
 
         # Timestamp de recebimento (São Paulo)
         received_at = now_sp_str()
+        received_at_dt = now_sp()
+
+        # IP de origem para audit trail
+        source_ip = request.client.host if request.client else None
 
         # Validar e processar conforme tipo
         if webhook_type == "CHECKLIST":
-            return await process_checklist(body, url, payload, event_id, received_at)
+            return await process_checklist(
+                body, url, payload, event_id, received_at, received_at_dt, source_ip
+            )
 
         elif webhook_type == "RESULTADOCHECKLIST":
-            return await process_resultado_checklist(body, url, payload, event_id, received_at)
+            return await process_resultado_checklist(
+                body, url, payload, event_id, received_at, received_at_dt, source_ip
+            )
 
         elif webhook_type == "PESQUISACONCULTA":
-            return await process_pesquisa_consulta(body, url, payload, event_id, received_at)
+            return await process_pesquisa_consulta(
+                body, url, payload, event_id, received_at, received_at_dt, source_ip
+            )
 
         else:
             raise HTTPException(
@@ -159,27 +218,46 @@ async def process_checklist(
     payload: Dict[str, Any],
     event_id: str | None,
     received_at: str,
+    received_at_dt: datetime,
+    source_ip: str | None,
 ):
     """Processa webhook CHECKLIST."""
     try:
         ChecklistWebhookRequest(**body)
 
-        success = save_webhook_log("CHECKLIST", payload, url, event_id, received_at)
+        file_saved = save_webhook_log("CHECKLIST", payload, url, event_id, received_at)
+        if not file_saved:
+            logger.warning("Falha ao salvar log em arquivo para CHECKLIST")
 
-        if success:
-            logger.info(f"Checklist recebido e salvo: {payload.get('codchecklist')}")
-            return JSONResponse(
-                status_code=200,
-                content={
-                    "status": "success",
-                    "message": "Webhook CHECKLIST recebido e salvo com sucesso",
-                    "webhook_type": "CHECKLIST",
-                    "codchecklist": payload.get("codchecklist"),
-                    "event_id": event_id,
-                    "received_at": received_at,
-                },
+        async with get_async_session() as session:
+            await save_webhook_event(
+                session,
+                "CHECKLIST",
+                url,
+                payload,
+                event_id,
+                received_at_dt,
+                source_ip,
             )
-        raise Exception("Erro ao salvar log em arquivo")
+
+        logger.info(f"Checklist recebido e salvo: {payload.get('codchecklist')}")
+        log_audit_event(
+            action="WEBHOOK_RECEIVED",
+            details={"webhook_type": "CHECKLIST", "codchecklist": payload.get("codchecklist")},
+            source_ip=source_ip,
+            event_id=event_id,
+        )
+        return JSONResponse(
+            status_code=200,
+            content={
+                "status": "success",
+                "message": "Webhook CHECKLIST recebido e salvo com sucesso",
+                "webhook_type": "CHECKLIST",
+                "codchecklist": payload.get("codchecklist"),
+                "event_id": event_id,
+                "received_at": received_at,
+            },
+        )
 
     except ValueError as e:
         raise HTTPException(status_code=422, detail=f"Dados inválidos: {e}")
@@ -191,28 +269,51 @@ async def process_resultado_checklist(
     payload: Dict[str, Any],
     event_id: str | None,
     received_at: str,
+    received_at_dt: datetime,
+    source_ip: str | None,
 ):
     """Processa webhook RESULTADOCHECKLIST."""
     try:
         ResultadoChecklistWebhookRequest(**body)
 
-        success = save_webhook_log("RESULTADOCHECKLIST", payload, url, event_id, received_at)
+        file_saved = save_webhook_log("RESULTADOCHECKLIST", payload, url, event_id, received_at)
+        if not file_saved:
+            logger.warning("Falha ao salvar log em arquivo para RESULTADOCHECKLIST")
 
-        if success:
-            logger.info(f"Resultado Checklist recebido e salvo: {payload.get('codchecklist')}")
-            return JSONResponse(
-                status_code=200,
-                content={
-                    "status": "success",
-                    "message": "Webhook RESULTADOCHECKLIST recebido e salvo com sucesso",
-                    "webhook_type": "RESULTADOCHECKLIST",
-                    "codchecklist": payload.get("codchecklist"),
-                    "resultado": payload.get("resultado"),
-                    "event_id": event_id,
-                    "received_at": received_at,
-                },
+        async with get_async_session() as session:
+            await save_webhook_event(
+                session,
+                "RESULTADOCHECKLIST",
+                url,
+                payload,
+                event_id,
+                received_at_dt,
+                source_ip,
             )
-        raise Exception("Erro ao salvar log em arquivo")
+
+        logger.info(f"Resultado Checklist recebido e salvo: {payload.get('codchecklist')}")
+        log_audit_event(
+            action="WEBHOOK_RECEIVED",
+            details={
+                "webhook_type": "RESULTADOCHECKLIST",
+                "codchecklist": payload.get("codchecklist"),
+                "resultado": payload.get("resultado"),
+            },
+            source_ip=source_ip,
+            event_id=event_id,
+        )
+        return JSONResponse(
+            status_code=200,
+            content={
+                "status": "success",
+                "message": "Webhook RESULTADOCHECKLIST recebido e salvo com sucesso",
+                "webhook_type": "RESULTADOCHECKLIST",
+                "codchecklist": payload.get("codchecklist"),
+                "resultado": payload.get("resultado"),
+                "event_id": event_id,
+                "received_at": received_at,
+            },
+        )
 
     except ValueError as e:
         raise HTTPException(status_code=422, detail=f"Dados inválidos: {e}")
@@ -224,52 +325,117 @@ async def process_pesquisa_consulta(
     payload: Dict[str, Any],
     event_id: str | None,
     received_at: str,
+    received_at_dt: datetime,
+    source_ip: str | None,
 ):
     """Processa webhook PESQUISACONCULTA."""
     try:
         PesquisaConsultaWebhookRequest(**body)
 
-        success = save_webhook_log("PESQUISACONCULTA", payload, url, event_id, received_at)
+        file_saved = save_webhook_log("PESQUISACONCULTA", payload, url, event_id, received_at)
+        if not file_saved:
+            logger.warning("Falha ao salvar log em arquivo para PESQUISACONCULTA")
 
-        if success:
-            logger.info(f"Pesquisa/Consulta recebida e salva: {payload.get('id')}")
-            return JSONResponse(
-                status_code=200,
-                content={
-                    "status": "success",
-                    "message": "Webhook PESQUISACONCULTA recebido e salvo com sucesso",
-                    "webhook_type": "PESQUISACONCULTA",
-                    "id": payload.get("id"),
-                    "situation": payload.get("situation"),
-                    "event_id": event_id,
-                    "received_at": received_at,
-                },
+        async with get_async_session() as session:
+            await save_webhook_event(
+                session,
+                "PESQUISACONCULTA",
+                url,
+                payload,
+                event_id,
+                received_at_dt,
+                source_ip,
             )
-        raise Exception("Erro ao salvar log em arquivo")
+
+        logger.info(f"Pesquisa/Consulta recebida e salva: {payload.get('id')}")
+        log_audit_event(
+            action="WEBHOOK_RECEIVED",
+            details={
+                "webhook_type": "PESQUISACONCULTA",
+                "id": payload.get("id"),
+                "situation": payload.get("situation"),
+            },
+            source_ip=source_ip,
+            event_id=event_id,
+        )
+        return JSONResponse(
+            status_code=200,
+            content={
+                "status": "success",
+                "message": "Webhook PESQUISACONCULTA recebido e salvo com sucesso",
+                "webhook_type": "PESQUISACONCULTA",
+                "id": payload.get("id"),
+                "situation": payload.get("situation"),
+                "event_id": event_id,
+                "received_at": received_at,
+            },
+        )
 
     except ValueError as e:
         raise HTTPException(status_code=422, detail=f"Dados inválidos: {e}")
 
 
 # ──────────────────────────────────────────────────────────────────
-# Endpoints auxiliares
+# Endpoints de pesquisa (Postgres)
 # ──────────────────────────────────────────────────────────────────
-@app.get("/logs/{webhook_type}", tags=["Logs"])
+@app.get("/search/placa/{placa}", tags=["Search"])
 @limiter.limit(settings.RATE_LIMIT)
-async def get_logs(request: Request, webhook_type: str):
-    """Retorna todos os logs de um tipo de webhook específico."""
-    if webhook_type not in ("CHECKLIST", "RESULTADOCHECKLIST", "PESQUISACONCULTA"):
-        raise HTTPException(
-            status_code=400,
-            detail="Webhook type inválido. Use: CHECKLIST, RESULTADOCHECKLIST ou PESQUISACONCULTA",
-        )
+async def search_by_placa_endpoint(request: Request, placa: str):
+    source_ip = request.client.host if request.client else None
+    async with get_async_session() as session:
+        results = await search_by_placa(session, placa)
 
-    logs = get_webhook_logs(webhook_type)
-    return {
-        "webhook_type": webhook_type,
-        "total_records": len(logs),
-        "logs": logs,
-    }
+    log_audit_event(
+        action="SEARCH_PLACA",
+        details={"placa": placa, "total": len(results)},
+        source_ip=source_ip,
+    )
+    return {"placa": placa, "total": len(results), "results": results}
+
+
+@app.get("/search/cpf/{cpf}", tags=["Search"])
+@limiter.limit(settings.RATE_LIMIT)
+async def search_by_cpf_endpoint(request: Request, cpf: str):
+    source_ip = request.client.host if request.client else None
+    async with get_async_session() as session:
+        results = await search_by_cpf(session, cpf)
+
+    log_audit_event(
+        action="SEARCH_CPF",
+        details={"cpf": cpf, "total": len(results)},
+        source_ip=source_ip,
+    )
+    return {"cpf": cpf, "total": len(results), "results": results}
+
+
+@app.get("/placas", tags=["Search"])
+@limiter.limit(settings.RATE_LIMIT)
+async def list_placas_endpoint(request: Request):
+    source_ip = request.client.host if request.client else None
+    async with get_async_session() as session:
+        placas = await list_all_placas(session)
+
+    log_audit_event(
+        action="LIST_PLACAS",
+        details={"total": len(placas)},
+        source_ip=source_ip,
+    )
+    return {"total": len(placas), "placas": placas}
+
+
+@app.get("/cpfs", tags=["Search"])
+@limiter.limit(settings.RATE_LIMIT)
+async def list_cpfs_endpoint(request: Request):
+    source_ip = request.client.host if request.client else None
+    async with get_async_session() as session:
+        cpfs = await list_all_cpfs(session)
+
+    log_audit_event(
+        action="LIST_CPFS",
+        details={"total": len(cpfs)},
+        source_ip=source_ip,
+    )
+    return {"total": len(cpfs), "cpfs": cpfs}
 
 
 # ──────────────────────────────────────────────────────────────────
@@ -280,20 +446,24 @@ if __name__ == "__main__":
 
     print("""
     ╔════════════════════════════════════════════════════════════════╗
-    ║        Webhook API - RasterIntegra v2.0 (Segurança)          ║
+    ║  Webhook API - RasterIntegra v2.1 (LGPD + Segurança)        ║
     ║                                                                ║
     ║  Servidor rodando em: http://localhost:8000                   ║
     ║  Documentação:        http://localhost:8000/docs              ║
     ║                                                                ║
-    ║  Segurança ativa:                                             ║
+    ║  Segurança:                                                   ║
     ║  ✓ Idempotência via SHA256 + Redis (TTL 24h)                 ║
     ║  ✓ Rate Limiting global (100 req/min por IP)                 ║
     ║  ✓ Proteção contra Replay (timestamp validation)             ║
     ║                                                                ║
+    ║  LGPD:                                                        ║
+    ║  ✓ Criptografia Fernet de dados pessoais nos logs            ║
+    ║  ✓ Expurgo automático (30 dias)                              ║
+    ║  ✓ Audit trail (logs/audit.json)                             ║
+    ║                                                                ║
     ║  Endpoints:                                                   ║
     ║  ✓ POST /webhook       - Receber webhooks                    ║
     ║  ✓ GET  /health        - Health check                        ║
-    ║  ✓ GET  /logs/{type}   - Visualizar logs salvos              ║
     ╚════════════════════════════════════════════════════════════════╝
     """)
 

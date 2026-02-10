@@ -4,6 +4,7 @@ from fastapi import Request
 from fastapi.responses import JSONResponse
 from starlette.middleware.base import BaseHTTPMiddleware
 
+from audit import log_audit_event
 from dependencies import get_redis
 from security import generate_event_id, check_idempotency, validate_timestamp
 
@@ -49,6 +50,13 @@ class IdempotencyMiddleware(BaseHTTPMiddleware):
                 timestamp_str = payload.get("timestamp")
 
                 if not validate_timestamp(timestamp_str):
+                    source_ip = request.client.host if request.client else None
+                    log_audit_event(
+                        action="TIMESTAMP_REJECTED",
+                        details={"timestamp": timestamp_str},
+                        source_ip=source_ip,
+                        event_id=event_id,
+                    )
                     return JSONResponse(
                         status_code=400,
                         content={
@@ -65,7 +73,14 @@ class IdempotencyMiddleware(BaseHTTPMiddleware):
             is_new = await check_idempotency(redis, event_id)
 
             if not is_new:
+                source_ip = request.client.host if request.client else None
                 logger.warning(f"Requisição duplicada rejeitada: event_id={event_id[:16]}...")
+                log_audit_event(
+                    action="DUPLICATE_REJECTED",
+                    details={"reason": "Evento já processado (idempotência)"},
+                    source_ip=source_ip,
+                    event_id=event_id,
+                )
                 return JSONResponse(
                     status_code=409,
                     content={
@@ -92,6 +107,11 @@ class IdempotencyMiddleware(BaseHTTPMiddleware):
                 # Em caso de falha do Redis, permitir o request (fail-open)
                 # para não derrubar o serviço por indisponibilidade do cache
                 logger.warning("Redis indisponível — bypass de idempotência (fail-open)")
+                log_audit_event(
+                    action="REDIS_FAIL_OPEN",
+                    details={"error": str(e)},
+                    source_ip=request.client.host if request.client else None,
+                )
                 response = await call_next(request)
                 return response
             raise
