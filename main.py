@@ -18,6 +18,8 @@ import db_models
 from db_repository import (
     list_all_cpfs,
     list_all_placas,
+    list_dados_cpfs,
+    list_dados_placas,
     save_webhook_event,
     search_by_cpf,
     search_by_placa,
@@ -414,6 +416,20 @@ async def list_placas_endpoint(request: Request):
     )
     return {"total": len(placas), "placas": placas}
 
+@app.get("/placasdados", tags=["Search"])
+@limiter.limit(settings.RATE_LIMIT)
+async def list_placas_dados_endpoint(request: Request):
+    source_ip = request.client.host if request.client else None
+    async with get_async_session() as session:
+        placas_dados = await list_dados_placas(session)
+
+    log_audit_event(
+        action="LIST_PLACAS_DADOS",
+        details={"total": len(placas_dados)},
+        source_ip=source_ip,
+    )
+    return {"total": len(placas_dados), "placas": placas_dados}
+
 
 @app.get("/cpfs", tags=["Search"])
 @limiter.limit(settings.RATE_LIMIT)
@@ -428,6 +444,21 @@ async def list_cpfs_endpoint(request: Request):
         source_ip=source_ip,
     )
     return {"total": len(cpfs), "cpfs": cpfs}
+
+
+@app.get("/cpfsdados", tags=["Search"])
+@limiter.limit(settings.RATE_LIMIT)
+async def list_cpfs_dados_endpoint(request: Request):
+    source_ip = request.client.host if request.client else None
+    async with get_async_session() as session:
+        cpfs_dados = await list_dados_cpfs(session)
+
+    log_audit_event(
+        action="LIST_CPFS_DADOS",
+        details={"total": len(cpfs_dados)},
+        source_ip=source_ip,
+    )
+    return {"total": len(cpfs_dados), "cpfs": cpfs_dados}
 
 
 # ──────────────────────────────────────────────────────────────────

@@ -56,6 +56,58 @@ def _serialize_event(event: WebhookEvent) -> dict[str, Any]:
     }
 
 
+def _serialize_placa_event(event: WebhookEvent) -> dict[str, Any]:
+    """Serializa evento com campos relevantes para lista de placas."""
+    payload = desanitize_payload(event.payload)
+    
+    result = {
+        "id": event.id,
+        "webhook_type": event.webhook_type,
+        "received_at": event.received_at.isoformat(),
+        "event_id": event.event_id,
+        "source_ip": event.source_ip,
+    }
+    
+    # Adiciona campos específicos do payload baseado no tipo de webhook
+    if event.webhook_type in ("CHECKLIST", "RESULTADOCHECKLIST"):
+        result["codchecklist"] = payload.get("codchecklist")
+        
+        if event.webhook_type == "RESULTADOCHECKLIST":
+            result["resultado"] = payload.get("resultado")
+            result["codresultado"] = payload.get("codresultado")
+            result["dataexpiracao"] = payload.get("dataexpiracao")
+            result["produtos"] = payload.get("produtos", [])
+    
+    return result
+
+
+def _serialize_cpf_event(event: WebhookEvent) -> dict[str, Any]:
+    """Serializa evento com campos relevantes para lista de CPFs."""
+    payload = desanitize_payload(event.payload)
+    
+    result = {
+        "id": event.id,
+        "webhook_type": event.webhook_type,
+        "received_at": event.received_at.isoformat(),
+        "event_id": event.event_id,
+        "source_ip": event.source_ip,
+    }
+    
+    # Adiciona campos específicos do payload para PESQUISACONCULTA
+    if event.webhook_type == "PESQUISACONCULTA":
+        result["pesquisa_id"] = payload.get("id")
+        result["identification_type"] = payload.get("identification_type")
+        result["situation"] = payload.get("situation")
+        result["bond"] = payload.get("bond")
+        result["establishment_id"] = payload.get("establishment_id")
+        result["expiration_date"] = payload.get("expiration_date")
+        result["end_date"] = payload.get("end_date")
+        result["reasons"] = payload.get("reasons")
+        result["service"] = payload.get("service")
+    
+    return result
+
+
 async def save_webhook_event(
     session: AsyncSession,
     webhook_type: str,
@@ -139,6 +191,144 @@ async def list_all_placas(session: AsyncSession) -> list[str]:
             placas.append(decrypted)
 
     return sorted(set(placas))
+
+async def list_dados_placas(session: AsyncSession) -> list[dict[str, Any]]:
+    """Lista todos os dados agrupados por placa com pesquisas e checklists separados."""
+    stmt = (
+        select(WebhookEvent)
+        .where(
+            WebhookEvent.placa_hash.is_not(None),
+            WebhookEvent.webhook_type.in_(["CHECKLIST", "RESULTADOCHECKLIST"])
+        )
+        .order_by(WebhookEvent.received_at.desc())
+    )
+    result = await session.execute(stmt)
+    events = result.scalars().all()
+    
+    # Agrupa eventos por placa_hash
+    grouped: dict[str, list[WebhookEvent]] = {}
+    for event in events:
+        if event.placa_hash:
+            if event.placa_hash not in grouped:
+                grouped[event.placa_hash] = []
+            grouped[event.placa_hash].append(event)
+    
+    # Constrói a lista de dados por placa
+    placas_data: list[dict[str, Any]] = []
+    
+    for placa_hash, placa_events in grouped.items():
+        # Descriptografa a placa (pega o primeiro evento com placa_encrypted)
+        placa_decrypted = None
+        for event in placa_events:
+            if event.placa_encrypted:
+                placa_decrypted = decrypt_value(event.placa_encrypted)
+                if placa_decrypted and not placa_decrypted.startswith("["):
+                    break
+        
+        if not placa_decrypted:
+            continue
+        
+        # Separa eventos por tipo
+        pesquisas = []
+        checklists = []
+        
+        for event in placa_events:
+            serialized = _serialize_placa_event(event)
+            if event.webhook_type == "CHECKLIST":
+                pesquisas.append(serialized)
+            elif event.webhook_type == "RESULTADOCHECKLIST":
+                checklists.append(serialized)
+        
+        # Ordena por data (mais recente primeiro)
+        pesquisas.sort(key=lambda e: e["received_at"], reverse=True)
+        checklists.sort(key=lambda e: e["received_at"], reverse=True)
+        
+        # Calcula estatísticas
+        total_events = len(pesquisas) + len(checklists)
+        last_event_at = max(
+            (e["received_at"] for e in placa_events),
+            key=lambda dt: dt,
+            default=None
+        )
+        
+        placas_data.append({
+            "placa": placa_decrypted,
+            "pesquisas": pesquisas,
+            "checklists": checklists,
+            "total_events": total_events,
+            "last_event_at": last_event_at.isoformat() if last_event_at else None,
+        })
+    
+    # Ordena alfabeticamente por placa
+    placas_data.sort(key=lambda p: p["placa"])
+    
+    return placas_data
+
+
+async def list_dados_cpfs(session: AsyncSession) -> list[dict[str, Any]]:
+    """Lista todos os dados agrupados por CPF com consultas PESQUISACONCULTA."""
+    stmt = (
+        select(WebhookEvent)
+        .where(
+            WebhookEvent.cpf_hash.is_not(None),
+            WebhookEvent.webhook_type == "PESQUISACONCULTA"
+        )
+        .order_by(WebhookEvent.received_at.desc())
+    )
+    result = await session.execute(stmt)
+    events = result.scalars().all()
+    
+    # Agrupa eventos por cpf_hash
+    grouped: dict[str, list[WebhookEvent]] = {}
+    for event in events:
+        if event.cpf_hash:
+            if event.cpf_hash not in grouped:
+                grouped[event.cpf_hash] = []
+            grouped[event.cpf_hash].append(event)
+    
+    # Constrói a lista de dados por CPF
+    cpfs_data: list[dict[str, Any]] = []
+    
+    for cpf_hash, cpf_events in grouped.items():
+        # Descriptografa o CPF (pega o primeiro evento com cpf_encrypted)
+        cpf_decrypted = None
+        for event in cpf_events:
+            if event.cpf_encrypted:
+                cpf_decrypted = decrypt_value(event.cpf_encrypted)
+                if cpf_decrypted and not cpf_decrypted.startswith("["):
+                    break
+        
+        if not cpf_decrypted:
+            continue
+        
+        # Serializa todos os eventos
+        consultas = []
+        for event in cpf_events:
+            serialized = _serialize_cpf_event(event)
+            consultas.append(serialized)
+        
+        # Ordena por data (mais recente primeiro)
+        consultas.sort(key=lambda e: e["received_at"], reverse=True)
+        
+        # Calcula estatísticas
+        total_events = len(consultas)
+        last_event_at = max(
+            (e.received_at for e in cpf_events),
+            key=lambda dt: dt,
+            default=None
+        )
+        
+        cpfs_data.append({
+            "cpf": cpf_decrypted,
+            "consultas": consultas,
+            "total_events": total_events,
+            "last_event_at": last_event_at.isoformat() if last_event_at else None,
+        })
+    
+    # Ordena alfabeticamente por CPF
+    cpfs_data.sort(key=lambda c: c["cpf"])
+    
+    return cpfs_data
 
 
 async def list_all_cpfs(session: AsyncSession) -> list[str]:
