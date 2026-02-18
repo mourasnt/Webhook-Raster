@@ -25,9 +25,9 @@ from db_repository import (
 from dependencies import startup_redis, shutdown_redis
 from middleware import IdempotencyMiddleware
 from models import (
-    ChecklistWebhookRequest,
-    ResultadoChecklistWebhookRequest,
-    PesquisaConsultaWebhookRequest,
+    ChecklistPayload,
+    PesquisaConsultaPayload,
+    ResultadoChecklistPayload,
 )
 from retention import retention_background_task
 from security import now_sp, now_sp_str
@@ -156,12 +156,10 @@ async def receive_webhook(request: Request):
     - Criptografia de dados pessoais nos logs (LGPD)
     """
     try:
-        body = await request.json()
-        url = body.get("url", "")
-        payload = body.get("payload", {})
+        payload = await request.json()
 
-        if not payload:
-            raise HTTPException(status_code=400, detail="Campo 'payload' obrigatório")
+        if not payload or payload == {}:
+            raise HTTPException(status_code=400, detail="Body obrigatório")
 
         # Identificar tipo de webhook pelo campo metodo ou method
         webhook_type = payload.get("metodo") or payload.get("method")
@@ -185,17 +183,17 @@ async def receive_webhook(request: Request):
         # Validar e processar conforme tipo
         if webhook_type == "CHECKLIST":
             return await process_checklist(
-                body, url, payload, event_id, received_at, received_at_dt, source_ip
+                payload, event_id, received_at, received_at_dt, source_ip
             )
 
         elif webhook_type == "RESULTADOCHECKLIST":
             return await process_resultado_checklist(
-                body, url, payload, event_id, received_at, received_at_dt, source_ip
+                payload, event_id, received_at, received_at_dt, source_ip
             )
 
         elif webhook_type == "PESQUISACONCULTA":
             return await process_pesquisa_consulta(
-                body, url, payload, event_id, received_at, received_at_dt, source_ip
+                payload, event_id, received_at, received_at_dt, source_ip
             )
 
         else:
@@ -216,8 +214,6 @@ async def receive_webhook(request: Request):
 # Processadores por tipo
 # ──────────────────────────────────────────────────────────────────
 async def process_checklist(
-    body: Dict[str, Any],
-    url: str,
     payload: Dict[str, Any],
     event_id: str | None,
     received_at: str,
@@ -226,9 +222,9 @@ async def process_checklist(
 ):
     """Processa webhook CHECKLIST."""
     try:
-        ChecklistWebhookRequest(**body)
+        ChecklistPayload(**payload)
 
-        file_saved = save_webhook_log("CHECKLIST", payload, url, event_id, received_at)
+        file_saved = save_webhook_log("CHECKLIST", payload, event_id, received_at)
         if not file_saved:
             logger.warning("Falha ao salvar log em arquivo para CHECKLIST")
 
@@ -236,7 +232,6 @@ async def process_checklist(
             await save_webhook_event(
                 session,
                 "CHECKLIST",
-                url,
                 payload,
                 event_id,
                 received_at_dt,
@@ -267,8 +262,6 @@ async def process_checklist(
 
 
 async def process_resultado_checklist(
-    body: Dict[str, Any],
-    url: str,
     payload: Dict[str, Any],
     event_id: str | None,
     received_at: str,
@@ -277,9 +270,9 @@ async def process_resultado_checklist(
 ):
     """Processa webhook RESULTADOCHECKLIST."""
     try:
-        ResultadoChecklistWebhookRequest(**body)
+        ResultadoChecklistPayload(**payload)
 
-        file_saved = save_webhook_log("RESULTADOCHECKLIST", payload, url, event_id, received_at)
+        file_saved = save_webhook_log("RESULTADOCHECKLIST", payload, event_id, received_at)
         if not file_saved:
             logger.warning("Falha ao salvar log em arquivo para RESULTADOCHECKLIST")
 
@@ -287,7 +280,6 @@ async def process_resultado_checklist(
             await save_webhook_event(
                 session,
                 "RESULTADOCHECKLIST",
-                url,
                 payload,
                 event_id,
                 received_at_dt,
@@ -323,8 +315,6 @@ async def process_resultado_checklist(
 
 
 async def process_pesquisa_consulta(
-    body: Dict[str, Any],
-    url: str,
     payload: Dict[str, Any],
     event_id: str | None,
     received_at: str,
@@ -333,9 +323,9 @@ async def process_pesquisa_consulta(
 ):
     """Processa webhook PESQUISACONCULTA."""
     try:
-        PesquisaConsultaWebhookRequest(**body)
+        PesquisaConsultaPayload(**payload)
 
-        file_saved = save_webhook_log("PESQUISACONCULTA", payload, url, event_id, received_at)
+        file_saved = save_webhook_log("PESQUISACONCULTA", payload, event_id, received_at)
         if not file_saved:
             logger.warning("Falha ao salvar log em arquivo para PESQUISACONCULTA")
 
@@ -343,7 +333,6 @@ async def process_pesquisa_consulta(
             await save_webhook_event(
                 session,
                 "PESQUISACONCULTA",
-                url,
                 payload,
                 event_id,
                 received_at_dt,
