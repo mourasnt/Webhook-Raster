@@ -57,20 +57,5 @@ class PesquisaConsultaPayload(BaseModel):
     reasons: Optional[str] = None
     base64: Optional[str] = ""
     timestamp: Optional[str] = Field(
-        None, description="Timestamp ISO 8601 do evento (opcional, para validação anti-replay)"
+        None, description="Timestamp ISO 8601 do evento"
     )
-
-
-class ChecklistWebhookRequest(BaseModel):
-    url: str
-    payload: ChecklistPayload
-
-
-class ResultadoChecklistWebhookRequest(BaseModel):
-    url: str
-    payload: ResultadoChecklistPayload
-
-
-class PesquisaConsultaWebhookRequest(BaseModel):
-    url: str
-    payload: PesquisaConsultaPayload

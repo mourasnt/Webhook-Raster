@@ -15,7 +15,6 @@ class WebhookEvent(Base):
     received_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True, nullable=False)
     event_id: Mapped[str | None] = mapped_column(String(64), index=True)
     source_ip: Mapped[str | None] = mapped_column(String(64))
-    url: Mapped[str | None] = mapped_column(Text)
 
     payload: Mapped[dict] = mapped_column(JSONB, nullable=False)
 

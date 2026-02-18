@@ -52,7 +52,6 @@ def _serialize_event(event: WebhookEvent) -> dict[str, Any]:
         "received_at": event.received_at.isoformat(),
         "event_id": event.event_id,
         "source_ip": event.source_ip,
-        "url": event.url,
         "payload": desanitize_payload(event.payload),
     }
 
@@ -60,7 +59,6 @@ def _serialize_event(event: WebhookEvent) -> dict[str, Any]:
 async def save_webhook_event(
     session: AsyncSession,
     webhook_type: str,
-    url: str,
     payload: dict[str, Any],
     event_id: str | None,
     received_at: datetime | None,
@@ -80,7 +78,6 @@ async def save_webhook_event(
         received_at=received_at or now_sp(),
         event_id=event_id,
         source_ip=source_ip,
-        url=url,
         payload=safe_payload,
         placa_encrypted=encrypt_value(placa) if placa else None,
         cpf_encrypted=encrypt_value(cpf) if cpf else None,
