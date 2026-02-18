@@ -36,11 +36,37 @@ def _hash_value(value: str | None) -> str | None:
 
 
 def _extract_placa(payload: dict[str, Any]) -> str | None:
+    """Extrai placa do payload.
+    
+    Para CHECKLIST/RESULTADOCHECKLIST: usa campo 'placa'
+    Para PESQUISACONCULTA: usa campo 'identification' SE identification_type == 'V'
+    """
     placa = payload.get("placa")
-    return placa if isinstance(placa, str) and placa else None
+    if placa and isinstance(placa, str):
+        return placa
+    
+    # Para PESQUISACONCULTA com veículos
+    identification_type = payload.get("identification_type")
+    if identification_type == "V":
+        identification = payload.get("identification")
+        return identification if isinstance(identification, str) and identification else None
+    
+    return None
 
 
 def _extract_cpf(payload: dict[str, Any]) -> str | None:
+    """Extrai CPF/CNPJ do payload.
+    
+    Para PESQUISACONCULTA: usa campo 'identification' SE identification_type != 'V'
+    (V = Veículo, então não é CPF)
+    """
+    identification_type = payload.get("identification_type")
+    
+    # Se for veículo, não é CPF
+    if identification_type == "V":
+        return None
+    
+    # Para PESQUISACONCULTA com pessoas (C, P, etc.) ou sem tipo definido
     identification = payload.get("identification")
     return identification if isinstance(identification, str) and identification else None
 
@@ -199,12 +225,17 @@ async def list_all_placas(session: AsyncSession) -> list[str]:
     return sorted(set(placas))
 
 async def list_dados_placas(session: AsyncSession) -> list[dict[str, Any]]:
-    """Lista todos os dados agrupados por placa com pesquisas e checklists separados."""
+    """Lista todos os dados agrupados por placa com pesquisas e checklists separados.
+    
+    Inclui:
+    - CHECKLIST e RESULTADOCHECKLIST (sempre têm placa)
+    - PESQUISACONCULTA onde identification_type = 'V' (veículos)
+    """
     stmt = (
         select(WebhookEvent)
         .where(
             WebhookEvent.placa_hash.is_not(None),
-            WebhookEvent.webhook_type.in_(["CHECKLIST", "RESULTADOCHECKLIST"])
+            WebhookEvent.webhook_type.in_(["CHECKLIST", "RESULTADOCHECKLIST", "PESQUISACONCULTA"])
         )
         .order_by(WebhookEvent.received_at.desc())
     )
@@ -237,20 +268,27 @@ async def list_dados_placas(session: AsyncSession) -> list[dict[str, Any]]:
         # Separa eventos por tipo
         pesquisas = []
         checklists = []
+        consultas_veiculo = []
         
         for event in placa_events:
-            serialized = _serialize_placa_event(event)
             if event.webhook_type == "CHECKLIST":
+                serialized = _serialize_placa_event(event)
                 pesquisas.append(serialized)
             elif event.webhook_type == "RESULTADOCHECKLIST":
+                serialized = _serialize_placa_event(event)
                 checklists.append(serialized)
+            elif event.webhook_type == "PESQUISACONCULTA":
+                # Inclui consultas de veículos
+                serialized = _serialize_cpf_event(event)  # Usa serialização de CPF que tem campos de PESQUISACONCULTA
+                consultas_veiculo.append(serialized)
         
         # Ordena por data (mais recente primeiro)
         pesquisas.sort(key=lambda e: e["received_at"], reverse=True)
         checklists.sort(key=lambda e: e["received_at"], reverse=True)
+        consultas_veiculo.sort(key=lambda e: e["received_at"], reverse=True)
         
         # Calcula estatísticas
-        total_events = len(pesquisas) + len(checklists)
+        total_events = len(pesquisas) + len(checklists) + len(consultas_veiculo)
         last_event_at = max(
             (e.received_at for e in placa_events),
             key=lambda dt: dt,
@@ -261,6 +299,7 @@ async def list_dados_placas(session: AsyncSession) -> list[dict[str, Any]]:
             "placa": placa_decrypted,
             "pesquisas": pesquisas,
             "checklists": checklists,
+            "consultas": consultas_veiculo,  # Adiciona consultas de veículos
             "total_events": total_events,
             "last_event_at": last_event_at.isoformat() if last_event_at else None,
         })
