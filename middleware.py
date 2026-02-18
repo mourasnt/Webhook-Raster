@@ -90,8 +90,9 @@ class IdempotencyMiddleware(BaseHTTPMiddleware):
                     headers={"X-Event-Id": event_id},
                 )
 
-            # Injetar event_id no state do request para uso downstream
+            # Injetar event_id e body no state do request para uso downstream
             request.state.event_id = event_id
+            request.state._body = body.decode('utf-8') if body else None
 
             # Processar request normalmente
             response = await call_next(request)

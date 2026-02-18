@@ -52,6 +52,8 @@ services:
       - LOG_RETENTION_DAYS=30
       - AUDIT_LOG_FILE=logs/audit.json
       - ENCRYPTION_KEY=_3-MRU8UvuARYWKqWoXQtFZVI8EOJMFwENdAWFwyP-g=
+      - GOOGLE_DRIVE_FOLDER_ID=1dD8OFbQZgeMMPSJ7CcdKtdzk-ITlBaOZ
+      - GOOGLE_CREDENTIALS_FILE=credentials.json
     depends_on:
       postgres:
         condition: service_healthy

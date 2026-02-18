@@ -1,0 +1,261 @@
+"""
+Módulo para integração com Google Drive API.
+Faz upload de documentos em base64 para uma pasta específica no Drive.
+"""
+
+import base64
+import io
+import logging
+from datetime import datetime
+from typing import Tuple, Optional
+
+from google.oauth2 import service_account
+from googleapiclient.discovery import build
+from googleapiclient.http import MediaIoBaseUpload
+from googleapiclient.errors import HttpError
+
+from config import settings
+
+logger = logging.getLogger(__name__)
+
+# Singleton para o serviço do Drive
+_drive_service = None
+
+
+def _get_drive_service():
+    """
+    Retorna uma instância singleton do serviço Google Drive.
+    
+    Returns:
+        Resource: Serviço Google Drive API v3
+        
+    Raises:
+        FileNotFoundError: Se credentials.json não for encontrado
+        Exception: Se houver erro na autenticação
+    """
+    global _drive_service
+    
+    if _drive_service is None:
+        try:
+            credentials = service_account.Credentials.from_service_account_file(
+                settings.GOOGLE_CREDENTIALS_FILE,
+                scopes=['https://www.googleapis.com/auth/drive.file']
+            )
+            _drive_service = build('drive', 'v3', credentials=credentials)
+            logger.info("Serviço Google Drive inicializado com sucesso")
+        except FileNotFoundError:
+            logger.error(f"Arquivo de credenciais não encontrado: {settings.GOOGLE_CREDENTIALS_FILE}")
+            raise
+        except Exception as e:
+            logger.error(f"Erro ao inicializar serviço Google Drive: {e}")
+            raise
+    
+    return _drive_service
+
+
+def _detect_mime_type(base64_string: str) -> str:
+    """
+    Detecta o tipo MIME do arquivo a partir do base64.
+    
+    Args:
+        base64_string: String em base64 (pode incluir data URI)
+        
+    Returns:
+        str: Tipo MIME detectado (jpg, png, pdf, etc.)
+    """
+    # Remove data URI se presente
+    if "," in base64_string:
+        header, base64_string = base64_string.split(",", 1)
+        # Extrai MIME do header se presente
+        if "data:" in header and "/" in header:
+            mime = header.split("data:")[1].split(";")[0]
+            return mime
+    
+    # Decodifica início do arquivo para verificar magic bytes
+    try:
+        decoded = base64.b64decode(base64_string[:100])
+        
+        # Magic bytes para tipos comuns
+        if decoded.startswith(b'\xff\xd8\xff'):
+            return "image/jpeg"
+        elif decoded.startswith(b'\x89PNG'):
+            return "image/png"
+        elif decoded.startswith(b'%PDF'):
+            return "application/pdf"
+        elif decoded.startswith(b'GIF89a') or decoded.startswith(b'GIF87a'):
+            return "image/gif"
+        elif decoded.startswith(b'\x42\x4d'):
+            return "image/bmp"
+        
+    except Exception as e:
+        logger.warning(f"Erro ao detectar MIME type: {e}")
+    
+    # Default para JPEG se não conseguir detectar
+    return "image/jpeg"
+
+
+def format_filename(identification: str, expiration_date: str) -> str:
+    """
+    Formata o nome do arquivo conforme especificação:
+    "identificação - VALIDADE (DD-MM-YYYY).extensão"
+    
+    Args:
+        identification: CPF, CNPJ ou outro identificador
+        expiration_date: Data de validade no formato ISO (YYYY-MM-DD)
+        
+    Returns:
+        str: Nome do arquivo formatado (sem extensão)
+        
+    Examples:
+        >>> format_filename("12345678900", "2025-06-01")
+        "12345678900 - VALIDADE (01-06-2025)"
+    """
+    try:
+        # Converte data de YYYY-MM-DD para DD-MM-YYYY
+        date_obj = datetime.strptime(expiration_date, "%Y-%m-%d")
+        formatted_date = date_obj.strftime("%d-%m-%Y")
+    except ValueError:
+        # Se já estiver em outro formato, tenta DD/MM/YYYY
+        try:
+            date_obj = datetime.strptime(expiration_date, "%d/%m/%Y")
+            formatted_date = date_obj.strftime("%d-%m-%Y")
+        except ValueError:
+            # Usa a data original se não conseguir parsear
+            formatted_date = expiration_date.replace("/", "-")
+    
+    return f"{identification} - VALIDADE ({formatted_date})"
+
+
+def upload_document(
+    base64_data: str,
+    identification: str,
+    expiration_date: str,
+    folder_id: Optional[str] = None
+) -> Optional[Tuple[str, str]]:
+    """
+    Faz upload de documento em base64 para o Google Drive.
+    
+    Args:
+        base64_data: String em base64 do documento
+        identification: CPF/CNPJ para nome do arquivo
+        expiration_date: Data de validade (YYYY-MM-DD ou DD/MM/YYYY)
+        folder_id: ID da pasta no Drive (usa settings.GOOGLE_DRIVE_FOLDER_ID se None)
+        
+    Returns:
+        tuple[str, str] | None: (file_id, file_url) se sucesso, None se falhar
+        
+    Example:
+        >>> result = upload_document("iVBORw0KGgo...", "12345678900", "2025-06-01")
+        >>> if result:
+        >>>     file_id, file_url = result
+        >>>     print(f"Upload: {file_url}")
+    """
+    try:
+        service = _get_drive_service()
+        
+        # Remove prefixo data URI se presente
+        if "," in base64_data:
+            _, base64_data = base64_data.split(",", 1)
+        
+        # Decodifica base64
+        file_bytes = base64.b64decode(base64_data)
+        
+        # Detecta tipo MIME e extensão
+        mime_type = _detect_mime_type(base64_data)
+        extension_map = {
+            "image/jpeg": "jpg",
+            "image/png": "png",
+            "application/pdf": "pdf",
+            "image/gif": "gif",
+            "image/bmp": "bmp",
+        }
+        extension = extension_map.get(mime_type, "jpg")
+        
+        # Formata nome do arquivo
+        filename_base = format_filename(identification, expiration_date)
+        filename = f"{filename_base}.{extension}"
+        
+        # Prepara upload
+        file_stream = io.BytesIO(file_bytes)
+        media = MediaIoBaseUpload(file_stream, mimetype=mime_type, resumable=True)
+        
+        # Metadados do arquivo
+        file_metadata = {
+            'name': filename,
+            'mimeType': mime_type
+        }
+        
+        # Define pasta de destino
+        target_folder_id = folder_id or settings.GOOGLE_DRIVE_FOLDER_ID
+        if target_folder_id:
+            file_metadata['parents'] = [target_folder_id]
+        
+        # Faz upload
+        logger.info(f"Iniciando upload: {filename} ({len(file_bytes)} bytes)")
+        file = service.files().create(
+            body=file_metadata,
+            media_body=media,
+            fields='id, webViewLink, webContentLink'
+        ).execute()
+        
+        file_id = file.get('id')
+        file_url = file.get('webViewLink') or file.get('webContentLink')
+        
+        logger.info(f"Upload concluído: {filename} - ID: {file_id}")
+        
+        return (file_id, file_url)
+        
+    except HttpError as e:
+        logger.error(f"Erro HTTP ao fazer upload para Google Drive: {e}")
+        return None
+    except Exception as e:
+        logger.error(f"Erro inesperado ao fazer upload para Google Drive: {e}")
+        return None
+
+
+def delete_document(file_id: str) -> bool:
+    """
+    Remove um documento do Google Drive.
+    
+    Args:
+        file_id: ID do arquivo no Google Drive
+        
+    Returns:
+        bool: True se deletado com sucesso, False caso contrário
+    """
+    try:
+        service = _get_drive_service()
+        service.files().delete(fileId=file_id).execute()
+        logger.info(f"Arquivo deletado do Drive: {file_id}")
+        return True
+    except HttpError as e:
+        logger.error(f"Erro ao deletar arquivo do Drive {file_id}: {e}")
+        return False
+    except Exception as e:
+        logger.error(f"Erro inesperado ao deletar arquivo do Drive {file_id}: {e}")
+        return False
+
+
+def get_file_info(file_id: str) -> Optional[dict]:
+    """
+    Obtém informações sobre um arquivo no Google Drive.
+    
+    Args:
+        file_id: ID do arquivo no Google Drive
+        
+    Returns:
+        dict | None: Informações do arquivo ou None se não encontrado
+    """
+    try:
+        service = _get_drive_service()
+        file = service.files().get(
+            fileId=file_id,
+            fields='id, name, mimeType, size, createdTime, modifiedTime, webViewLink'
+        ).execute()
+        return file
+    except HttpError as e:
+        logger.error(f"Erro ao obter informações do arquivo {file_id}: {e}")
+        return None
+    except Exception as e:
+        logger.error(f"Erro inesperado ao obter informações do arquivo {file_id}: {e}")
+        return None

@@ -33,7 +33,7 @@ from models import (
 )
 from retention import retention_background_task
 from security import now_sp, now_sp_str
-from utils import save_webhook_log
+from utils import save_webhook_log, save_error_log, get_error_logs
 
 # ──────────────────────────────────────────────────────────────────
 # Logging
@@ -120,6 +120,97 @@ async def rate_limit_exceeded_handler(request: Request, exc: RateLimitExceeded):
 # Registrar rate limiter
 app.state.limiter = limiter
 app.add_exception_handler(RateLimitExceeded, rate_limit_exceeded_handler)
+
+# ──────────────────────────────────────────────────────────────────
+# Exception Handlers (registra TODOS os erros em logs/errors.json)
+# ──────────────────────────────────────────────────────────────────
+@app.exception_handler(HTTPException)
+async def http_exception_handler(request: Request, exc: HTTPException):
+    """
+    Captura TODOS os erros HTTP (400, 422, 500, etc.) e registra em error log.
+    Fornece visibilidade total sobre erros com payload completo.
+    """
+    # Tentar obter payload do request
+    payload = None
+    try:
+        # Se o body ainda não foi consumido
+        if hasattr(request.state, "_body"):
+            import json
+            payload = json.loads(request.state._body)
+    except Exception:
+        pass
+    
+    # Obter informações do request
+    event_id = getattr(request.state, "event_id", None)
+    source_ip = request.client.host if request.client else None
+    webhook_type = payload.get("metodo") or payload.get("method") if payload else None
+    
+    # Salvar no error log
+    save_error_log(
+        status_code=exc.status_code,
+        error_detail=exc.detail,
+        payload=payload,
+        source_ip=source_ip,
+        event_id=event_id,
+        request_method=request.method,
+        request_url=str(request.url),
+        webhook_type=webhook_type,
+    )
+    
+    # Retornar resposta padrão
+    return JSONResponse(
+        status_code=exc.status_code,
+        content={"detail": exc.detail},
+    )
+
+
+@app.exception_handler(Exception)
+async def generic_exception_handler(request: Request, exc: Exception):
+    """
+    Captura exceções não tratadas (erros 500) e registra com stack trace completo.
+    """
+    import traceback
+    
+    # Obter stack trace completo
+    tb = traceback.format_exc()
+    
+    # Tentar obter payload
+    payload = None
+    try:
+        if hasattr(request.state, "_body"):
+            import json
+            payload = json.loads(request.state._body)
+    except Exception:
+        pass
+    
+    event_id = getattr(request.state, "event_id", None)
+    source_ip = request.client.host if request.client else None
+    webhook_type = payload.get("metodo") or payload.get("method") if payload else None
+    
+    # Salvar no error log com traceback
+    save_error_log(
+        status_code=500,
+        error_detail=f"Erro interno: {str(exc)}",
+        payload=payload,
+        source_ip=source_ip,
+        event_id=event_id,
+        request_method=request.method,
+        request_url=str(request.url),
+        traceback=tb,
+        webhook_type=webhook_type,
+    )
+    
+    logger.error(f"Erro não tratado: {exc}\n{tb}")
+    
+    return JSONResponse(
+        status_code=500,
+        content={"detail": "Erro interno ao processar requisição"},
+    )
+
+
+# Registrar exception handlers
+app.add_exception_handler(HTTPException, http_exception_handler)
+app.add_exception_handler(Exception, generic_exception_handler)
 
 # Middlewares (ordem inversa de execução: último adicionado executa primeiro)
 # 1) SlowAPI → avalia rate limit antes de tudo
@@ -331,6 +422,33 @@ async def process_pesquisa_consulta(
         if not file_saved:
             logger.warning("Falha ao salvar log em arquivo para PESQUISACONCULTA")
 
+        # ========== UPLOAD PARA GOOGLE DRIVE ==========
+        drive_file_id = None
+        drive_file_url = None
+        
+        if payload.get("base64"):
+            try:
+                from google_drive import upload_document
+                
+                identification = payload.get("identification")
+                expiration_date = payload.get("expiration_date")
+                
+                if identification and expiration_date:
+                    result = upload_document(
+                        base64_data=payload["base64"],
+                        identification=identification,
+                        expiration_date=expiration_date
+                    )
+                    
+                    if result:
+                        drive_file_id, drive_file_url = result
+                        logger.info(f"Documento enviado para Google Drive: {drive_file_id}")
+                    
+            except Exception as e:
+                logger.error(f"Erro ao fazer upload para Google Drive: {e}")
+                # Não falha o webhook se o upload falhar
+        # ===============================================
+
         async with get_async_session() as session:
             await save_webhook_event(
                 session,
@@ -339,6 +457,8 @@ async def process_pesquisa_consulta(
                 event_id,
                 received_at_dt,
                 source_ip,
+                drive_file_id,
+                drive_file_url,
             )
 
         logger.info(f"Pesquisa/Consulta recebida e salva: {payload.get('id')}")
@@ -348,6 +468,7 @@ async def process_pesquisa_consulta(
                 "webhook_type": "PESQUISACONCULTA",
                 "id": payload.get("id"),
                 "situation": payload.get("situation"),
+                "drive_uploaded": drive_file_id is not None,
             },
             source_ip=source_ip,
             event_id=event_id,
@@ -362,6 +483,8 @@ async def process_pesquisa_consulta(
                 "situation": payload.get("situation"),
                 "event_id": event_id,
                 "received_at": received_at,
+                "drive_file_id": drive_file_id,
+                "drive_file_url": drive_file_url,
             },
         )
 
@@ -459,6 +582,41 @@ async def list_cpfs_dados_endpoint(request: Request):
         source_ip=source_ip,
     )
     return {"total": len(cpfs_dados), "cpfs": cpfs_dados}
+
+
+@app.get("/errors", tags=["Debug"])
+@limiter.limit(settings.RATE_LIMIT)
+async def list_errors_endpoint(request: Request, limit: int = 50):
+    """
+    Lista os últimos erros HTTP registrados no sistema.
+    
+    Exibe erros 4xx e 5xx com payload completo, stack trace e contexto.
+    Útil para debugging de erros 400, 422, 500.
+    
+    Args:
+        limit: Número máximo de erros a retornar (padrão: 50, máx: 200)
+    
+    Returns:
+        JSON com lista de erros ordenados por timestamp (mais recente primeiro)
+    """
+    source_ip = request.client.host if request.client else None
+    
+    # Limitar para não sobrecarregar resposta
+    limit = min(limit, 200)
+    
+    errors = get_error_logs(limit=limit)
+    
+    log_audit_event(
+        action="LIST_ERRORS",
+        details={"limit": limit, "total_returned": len(errors)},
+        source_ip=source_ip,
+    )
+    
+    return {
+        "total": len(errors),
+        "limit": limit,
+        "errors": errors
+    }
 
 
 # ──────────────────────────────────────────────────────────────────

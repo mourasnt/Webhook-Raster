@@ -1,2 +1,0 @@
-{"timestamp": "2026-02-09 16:27:08", "webhook_type": "CHECKLIST", "url": "http://localhost:8000", "payload": {"metodo": "CHECKLIST", "codchecklist": "1174461", "placa": "RAS-1234", "carreta01": "", "carreta02": "", "carreta03": "", "vinculo": "T", "codfilial": "11"}}
-{"timestamp": "2026-02-09 16:27:10", "webhook_type": "CHECKLIST", "url": "http://localhost:8000", "payload": {"metodo": "CHECKLIST", "codchecklist": "1174461", "placa": "RAS-1234", "carreta01": "", "carreta02": "", "carreta03": "", "vinculo": "T", "codfilial": "11"}}

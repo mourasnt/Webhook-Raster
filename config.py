@@ -38,5 +38,9 @@ class Settings:
     # Gerar com: python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
     ENCRYPTION_KEY: str = os.environ.get("ENCRYPTION_KEY", "")
 
+    # Google Drive — Upload de documentos base64
+    GOOGLE_DRIVE_FOLDER_ID: str = os.environ.get("GOOGLE_DRIVE_FOLDER_ID", "")
+    GOOGLE_CREDENTIALS_FILE: str = os.environ.get("GOOGLE_CREDENTIALS_FILE", "credentials.json")
+
 
 settings = Settings()

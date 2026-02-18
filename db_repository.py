@@ -53,6 +53,8 @@ def _serialize_event(event: WebhookEvent) -> dict[str, Any]:
         "event_id": event.event_id,
         "source_ip": event.source_ip,
         "payload": desanitize_payload(event.payload),
+        "drive_file_id": event.drive_file_id,
+        "drive_file_url": event.drive_file_url,
     }
 
 
@@ -115,6 +117,8 @@ async def save_webhook_event(
     event_id: str | None,
     received_at: datetime | None,
     source_ip: str | None,
+    drive_file_id: str | None = None,
+    drive_file_url: str | None = None,
 ) -> int:
     """Persiste o webhook no Postgres com dados criptografados."""
     safe_payload = sanitize_payload(payload)
@@ -135,6 +139,8 @@ async def save_webhook_event(
         cpf_encrypted=encrypt_value(cpf) if cpf else None,
         placa_hash=_hash_value(placa_norm),
         cpf_hash=_hash_value(cpf_norm),
+        drive_file_id=drive_file_id,
+        drive_file_url=drive_file_url,
     )
 
     session.add(event)
