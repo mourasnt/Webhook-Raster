@@ -92,7 +92,7 @@ def _serialize_cpf_event(event: WebhookEvent) -> dict[str, Any]:
         "event_id": event.event_id,
         "source_ip": event.source_ip,
     }
-    
+
     # Adiciona campos específicos do payload para PESQUISACONCULTA
     if event.webhook_type == "PESQUISACONCULTA":
         result["pesquisa_id"] = payload.get("id")
@@ -246,7 +246,7 @@ async def list_dados_placas(session: AsyncSession) -> list[dict[str, Any]]:
         # Calcula estatísticas
         total_events = len(pesquisas) + len(checklists)
         last_event_at = max(
-            (e["received_at"] for e in placa_events),
+            (e.received_at for e in placa_events),
             key=lambda dt: dt,
             default=None
         )
