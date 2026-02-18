@@ -12,13 +12,13 @@ class ProdutoItem(BaseModel):
 
 class ChecklistPayload(BaseModel):
     metodo: str = Field(..., description="CHECKLIST")
-    codchecklist: str
-    placa: str
-    carreta01: Optional[str] = ""
-    carreta02: Optional[str] = ""
-    carreta03: Optional[str] = ""
-    vinculo: str
-    codfilial: str
+    codchecklist: Optional[str] = None
+    placa: Optional[str] = None
+    carreta01: Optional[str] = None
+    carreta02: Optional[str] = None
+    carreta03: Optional[str] = None
+    vinculo: Optional[str] = None
+    codfilial: Optional[str] = None
     timestamp: Optional[str] = Field(
         None, description="Timestamp ISO 8601 do evento (opcional, para validação anti-replay)"
     )
@@ -26,18 +26,18 @@ class ChecklistPayload(BaseModel):
 
 class ResultadoChecklistPayload(BaseModel):
     metodo: str = Field(..., description="RESULTADOCHECKLIST")
-    codchecklist: str
-    placa: str
-    carreta01: Optional[str] = ""
-    carreta02: Optional[str] = ""
-    carreta03: Optional[str] = ""
-    vinculo: str
-    codfilial: str
-    codperfilseguranca: str
-    codresultado: str
-    resultado: str
-    dataexpiracao: str
-    produtos: List[ProdutoItem]
+    codchecklist: Optional[str] = None
+    placa: Optional[str] = None
+    carreta01: Optional[str] = None
+    carreta02: Optional[str] = None
+    carreta03: Optional[str] = None
+    vinculo: Optional[str] = None
+    codfilial: Optional[str] = None
+    codperfilseguranca: Optional[str] = None
+    codresultado: Optional[str] = None
+    resultado: Optional[str] = None
+    dataexpiracao: Optional[str] = None
+    produtos: Optional[List[ProdutoItem]] = None
     timestamp: Optional[str] = Field(
         None, description="Timestamp ISO 8601 do evento (opcional, para validação anti-replay)"
     )
@@ -47,15 +47,16 @@ class PesquisaConsultaPayload(BaseModel):
     method: str = Field(..., description="PESQUISACONCULTA")
     id: int
     identification: str
-    identification_type: str
-    password: str
-    situation: str
-    bond: str
-    establishment_id: int
-    expiration_date: str
-    end_date: str
+    identification_type: Optional[str] = None
+    password: Optional[str] = None
+    situation: Optional[str] = None
+    bond: Optional[str] = None
+    establishment_id: Optional[int] = None
+    expiration_date: Optional[str] = None
+    end_date: Optional[str] = None
     reasons: Optional[str] = None
-    base64: Optional[str] = ""
+    service: Optional[str] = None
+    base64: Optional[str] = None
     timestamp: Optional[str] = Field(
         None, description="Timestamp ISO 8601 do evento"
     )
