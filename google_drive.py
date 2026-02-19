@@ -5,6 +5,7 @@ Faz upload de documentos em base64 para uma pasta específica no Drive.
 
 import base64
 import io
+import json
 import logging
 from datetime import datetime
 from typing import Tuple, Optional
@@ -22,6 +23,36 @@ logger = logging.getLogger(__name__)
 _drive_service = None
 
 
+def _load_service_account_credentials() -> service_account.Credentials:
+    """
+    Carrega e valida credenciais de service account do Google.
+
+    Também normaliza private_key com "\\n" literal para quebras de linha reais,
+    evitando falhas de assinatura JWT quando o JSON foi serializado incorretamente.
+    """
+    with open(settings.GOOGLE_CREDENTIALS_FILE, "r", encoding="utf-8") as credentials_file:
+        service_account_info = json.load(credentials_file)
+
+    required_fields = ["type", "private_key", "client_email", "token_uri"]
+    missing_fields = [field for field in required_fields if not service_account_info.get(field)]
+    if missing_fields:
+        raise ValueError(
+            f"credentials.json inválido. Campos ausentes: {', '.join(missing_fields)}"
+        )
+
+    if service_account_info.get("type") != "service_account":
+        raise ValueError("credentials.json inválido. O campo 'type' deve ser 'service_account'.")
+
+    private_key = service_account_info.get("private_key", "")
+    if "\\n" in private_key and "\n" not in private_key:
+        service_account_info["private_key"] = private_key.replace("\\n", "\n")
+
+    return service_account.Credentials.from_service_account_info(
+        service_account_info,
+        scopes=['https://www.googleapis.com/auth/drive.file']
+    )
+
+
 def _get_drive_service():
     """
     Retorna uma instância singleton do serviço Google Drive.
@@ -37,14 +68,14 @@ def _get_drive_service():
     
     if _drive_service is None:
         try:
-            credentials = service_account.Credentials.from_service_account_file(
-                settings.GOOGLE_CREDENTIALS_FILE,
-                scopes=['https://www.googleapis.com/auth/drive.file']
-            )
+            credentials = _load_service_account_credentials()
             _drive_service = build('drive', 'v3', credentials=credentials)
             logger.info("Serviço Google Drive inicializado com sucesso")
         except FileNotFoundError:
             logger.error(f"Arquivo de credenciais não encontrado: {settings.GOOGLE_CREDENTIALS_FILE}")
+            raise
+        except ValueError as e:
+            logger.error(f"Credenciais Google Drive inválidas: {e}")
             raise
         except Exception as e:
             logger.error(f"Erro ao inicializar serviço Google Drive: {e}")

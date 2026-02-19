@@ -63,6 +63,7 @@ services:
       - webhook-net
     volumes:
       - webhook-logs:/app/logs
+      - ./credentials.json:/app/credentials.json:ro
 
 networks:
   webhook-net:

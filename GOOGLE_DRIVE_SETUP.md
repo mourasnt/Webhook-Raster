@@ -104,10 +104,11 @@ Você deve ver as colunas:
 ### 8. Rebuild e Restart Docker
 
 ```bash
-# Para aplicar as novas dependências (google-api-python-client, google-auth)
-docker compose down
-docker compose build
-docker compose up -d
+# No primeiro setup (ou quando Dockerfile mudar)
+docker compose up -d --build
+
+# Se apenas trocar credentials.json, basta reiniciar o serviço
+docker compose restart webhook-api
 ```
 
 ### 9. Verificar Logs
@@ -236,6 +237,14 @@ Isso garante que problemas temporários com o Google Drive não impeçam o receb
 - Verifique se a Google Drive API está habilitada no projeto
 - Verifique se o JSON das credenciais está válido (formato correto)
 - Tente gerar novas credenciais (new key) no Service Account
+
+### Erro: "invalid_grant: Invalid JWT Signature."
+
+- A causa mais comum é chave privada inválida/rotacionada no Service Account
+- Gere uma nova key JSON e substitua o arquivo `credentials.json` na raiz do projeto
+- Reinicie somente a API para recarregar o arquivo: `docker compose restart webhook-api`
+- Verifique se o JSON é de **Service Account** (`"type": "service_account"`)
+- Verifique se a chave não foi corrompida ao copiar (campo `private_key` deve conter header `BEGIN PRIVATE KEY`)
 
 ## Segurança
 

@@ -19,9 +19,6 @@ RUN pip install --no-cache-dir --upgrade pip && \
 # Copiar código da aplicação
 COPY config.py dependencies.py security.py middleware.py main.py models.py utils.py lgpd.py audit.py retention.py db.py db_models.py db_repository.py google_drive.py ./
 
-# Copiar credenciais do Google Drive (se existir)
-COPY credentials.json* ./
-
 # Criar diretório de logs com permissões adequadas
 RUN mkdir -p /app/logs && chown -R appuser:appuser /app
 
