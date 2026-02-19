@@ -23,6 +23,30 @@ logger = logging.getLogger(__name__)
 _drive_service = None
 
 
+def _extract_http_error_reason(error: HttpError) -> str:
+    """
+    Extrai o motivo principal de um HttpError da API Google.
+
+    Retorna string vazia caso não consiga inferir o motivo.
+    """
+    try:
+        if hasattr(error, "content") and error.content:
+            content = error.content.decode("utf-8") if isinstance(error.content, bytes) else str(error.content)
+            payload = json.loads(content)
+            details = payload.get("error", {}).get("errors", [])
+            if details and isinstance(details, list):
+                reason = details[0].get("reason")
+                if reason:
+                    return reason
+    except Exception:
+        pass
+
+    message = str(error)
+    if "storageQuotaExceeded" in message:
+        return "storageQuotaExceeded"
+    return ""
+
+
 def _load_service_account_credentials() -> service_account.Credentials:
     """
     Carrega e valida credenciais de service account do Google.
@@ -226,7 +250,8 @@ def upload_document(
         file = service.files().create(
             body=file_metadata,
             media_body=media,
-            fields='id, webViewLink, webContentLink'
+            fields='id, webViewLink, webContentLink',
+            supportsAllDrives=True
         ).execute()
         
         file_id = file.get('id')
@@ -237,6 +262,14 @@ def upload_document(
         return (file_id, file_url)
         
     except HttpError as e:
+        reason = _extract_http_error_reason(e)
+        if reason == "storageQuotaExceeded":
+            logger.error(
+                "Upload bloqueado por quota do Drive (storageQuotaExceeded). "
+                "Para Service Account, use pasta em Shared Drive e garanta permissão de membro "
+                "(ex: Content Manager). folder_id=%s",
+                target_folder_id,
+            )
         logger.error(f"Erro HTTP ao fazer upload para Google Drive: {e}")
         return None
     except Exception as e:
@@ -256,7 +289,7 @@ def delete_document(file_id: str) -> bool:
     """
     try:
         service = _get_drive_service()
-        service.files().delete(fileId=file_id).execute()
+        service.files().delete(fileId=file_id, supportsAllDrives=True).execute()
         logger.info(f"Arquivo deletado do Drive: {file_id}")
         return True
     except HttpError as e:
@@ -281,7 +314,8 @@ def get_file_info(file_id: str) -> Optional[dict]:
         service = _get_drive_service()
         file = service.files().get(
             fileId=file_id,
-            fields='id, name, mimeType, size, createdTime, modifiedTime, webViewLink'
+            fields='id, name, mimeType, size, createdTime, modifiedTime, webViewLink',
+            supportsAllDrives=True
         ).execute()
         return file
     except HttpError as e:

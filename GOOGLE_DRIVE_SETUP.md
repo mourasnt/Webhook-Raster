@@ -40,11 +40,12 @@ Quando um webhook `PESQUISACONCULTA` é recebido:
 6. **Renomeie** o arquivo para `credentials.json`
 7. **Mova** o arquivo para a raiz do projeto Webhook-Raster
 
-### 4. Criar Pasta no Google Drive
+### 4. Criar Pasta no Shared Drive
 
 1. Acesse https://drive.google.com/
-2. Crie uma nova pasta (ex: "Webhook Documents" ou "Documentos Raster")
-3. Abra a pasta e copie o **ID da pasta** da URL:
+2. Crie ou selecione um **Shared Drive**
+3. Dentro do Shared Drive, crie uma pasta (ex: "Webhook Documents" ou "Documentos Raster")
+4. Abra a pasta e copie o **ID da pasta** da URL:
    ```
    https://drive.google.com/drive/folders/1AbC2DeF3GhI4JkL5MnO6PqR
                                           ^^^^^^^^^^^^^^^^^^^^^^^^
@@ -53,12 +54,12 @@ Quando um webhook `PESQUISACONCULTA` é recebido:
 
 ### 5. Compartilhar Pasta com Service Account
 
-1. Clique com o botão direito na pasta criada
+1. Clique com o botão direito no Shared Drive (ou pasta no Shared Drive)
 2. Selecione **Share** (Compartilhar)
 3. No campo de email, cole o **email do Service Account**
    - O email está no arquivo `credentials.json` no campo `client_email`
    - Formato: `webhook-raster-drive@seu-projeto.iam.gserviceaccount.com`
-4. Altere a permissão para **Editor**
+4. Altere a permissão para **Content Manager** (ou superior)
 5. Desmarque a opção **Notify people** (não precisa enviar email)
 6. Clique em **Share**
 
@@ -114,7 +115,7 @@ docker compose restart webhook-api
 ### 9. Verificar Logs
 
 ```bash
-docker compose logs -f app
+docker compose logs -f webhook-api
 ```
 
 Procure por mensagens como:
@@ -213,7 +214,7 @@ Isso garante que problemas temporários com o Google Drive não impeçam o receb
 
 - Verifique se `credentials.json` está na raiz do projeto
 - Verifique a variável `GOOGLE_CREDENTIALS_FILE` no `.env`
-- Reinicie o container: `docker compose restart app`
+- Reinicie o container: `docker compose restart webhook-api`
 
 ### Erro: "Permission denied" ou "Insufficient Permission"
 
@@ -230,7 +231,7 @@ Isso garante que problemas temporários com o Google Drive não impeçam o receb
 
 - Verifique se o payload contém o campo `base64`
 - Verifique se os campos `identification` e `expiration_date` estão presentes
-- Consulte os logs: `docker compose logs app | grep "Drive"`
+- Consulte os logs: `docker compose logs webhook-api | grep "Drive"`
 
 ### Erros de autenticação
 
@@ -245,6 +246,13 @@ Isso garante que problemas temporários com o Google Drive não impeçam o receb
 - Reinicie somente a API para recarregar o arquivo: `docker compose restart webhook-api`
 - Verifique se o JSON é de **Service Account** (`"type": "service_account"`)
 - Verifique se a chave não foi corrompida ao copiar (campo `private_key` deve conter header `BEGIN PRIVATE KEY`)
+
+### Erro: "storageQuotaExceeded" com Service Account
+
+- Service Accounts não possuem quota de armazenamento no "Meu Drive"
+- Use uma pasta dentro de **Shared Drive** e configure esse ID em `GOOGLE_DRIVE_FOLDER_ID`
+- Garanta que a Service Account é membro do Shared Drive com permissão **Content Manager** (ou superior)
+- Depois de alterar pasta/permissão, reinicie a API: `docker compose restart webhook-api`
 
 ## Segurança
 
