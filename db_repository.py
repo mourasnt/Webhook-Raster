@@ -47,7 +47,7 @@ def _extract_placa(payload: dict[str, Any]) -> str | None:
     
     # Para PESQUISACONCULTA com veículos
     identification_type = payload.get("identification_type")
-    if identification_type == "V":
+    if identification_type == "V" or identification_type == "C":
         identification = payload.get("identification")
         return identification if isinstance(identification, str) and identification else None
     
@@ -63,7 +63,7 @@ def _extract_cpf(payload: dict[str, Any]) -> str | None:
     identification_type = payload.get("identification_type")
     
     # Se for veículo, não é CPF
-    if identification_type == "V":
+    if identification_type == "V" or identification_type == "C":
         return None
     
     # Para PESQUISACONCULTA com pessoas (C, P, etc.) ou sem tipo definido
