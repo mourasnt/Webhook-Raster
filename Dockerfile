@@ -17,7 +17,7 @@ RUN pip install --no-cache-dir --upgrade pip && \
     pip install --no-cache-dir -r requirements.txt
 
 # Copiar código da aplicação
-COPY config.py dependencies.py security.py middleware.py main.py models.py utils.py lgpd.py audit.py retention.py db.py db_models.py db_repository.py google_drive.py ./
+COPY config.py dependencies.py security.py middleware.py main.py models.py utils.py lgpd.py audit.py db.py db_models.py db_repository.py google_drive.py ./
 
 # Criar diretório de logs com permissões adequadas
 RUN mkdir -p /app/logs && chown -R appuser:appuser /app

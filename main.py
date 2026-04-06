@@ -31,7 +31,6 @@ from models import (
     PesquisaConsultaPayload,
     ResultadoChecklistPayload,
 )
-from retention import retention_background_task
 from security import now_sp, now_sp_str
 from utils import save_webhook_log, save_error_log, get_error_logs
 
@@ -58,23 +57,12 @@ limiter = Limiter(
 # ──────────────────────────────────────────────────────────────────
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """Gerencia ciclo de vida: conecta/desconecta Redis + retention task."""
+    """Gerencia ciclo de vida: conecta/desconecta Redis"""
     await startup_redis()
     await startup_db()
     await init_db()
 
-    # Iniciar background task de expurgo (LGPD Art. 15/16)
-    retention_task = asyncio.create_task(retention_background_task())
-    logger.info("Lifecycle → startup concluído (retenção LGPD ativa)")
-
     yield
-
-    # Cancelar task de retenção
-    retention_task.cancel()
-    try:
-        await retention_task
-    except asyncio.CancelledError:
-        pass
 
     await shutdown_redis()
     await shutdown_db()
