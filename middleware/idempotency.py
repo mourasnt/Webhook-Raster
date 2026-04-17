@@ -4,33 +4,19 @@ from fastapi import Request
 from fastapi.responses import JSONResponse
 from starlette.middleware.base import BaseHTTPMiddleware
 
-from audit import log_audit_event
-from dependencies import get_redis
-from security import generate_event_id, check_idempotency, validate_timestamp
+from audit.logger import log_audit_event
+from core.crypto import check_idempotency, generate_event_id, validate_timestamp
+from src.dependencies import get_redis
 
 logger = logging.getLogger(__name__)
 
 
 class IdempotencyMiddleware(BaseHTTPMiddleware):
-    """
-    Middleware de proteção contra replay e idempotência.
-
-    Intercepta apenas POST /webhook:
-    1. Lê bytes brutos do body → gera event_id (SHA256)
-    2. Consulta Redis para verificar duplicidade (SET NX atômico)
-    3. Se duplicado → 409 Conflict
-    4. Se novo → passa adiante e adiciona X-Event-Id na response
-
-    Também valida timestamp do payload se presente.
-    """
-
     async def dispatch(self, request: Request, call_next):
-        # Aplicar apenas em POST /webhook
         if request.method != "POST" or request.url.path != "/webhook":
             return await call_next(request)
 
         try:
-            # Ler body bytes brutos
             body = await request.body()
 
             if not body:
@@ -39,10 +25,8 @@ class IdempotencyMiddleware(BaseHTTPMiddleware):
                     content={"detail": "Request body vazio"},
                 )
 
-            # Gerar event_id via SHA256
             event_id = generate_event_id(body)
 
-            # Verificar timestamp do payload (se presente)
             try:
                 import json
                 payload_data = json.loads(body)
@@ -65,10 +49,8 @@ class IdempotencyMiddleware(BaseHTTPMiddleware):
                         },
                     )
             except (json.JSONDecodeError, AttributeError):
-                # Se não for JSON válido, deixar o handler tratar o erro
                 pass
 
-            # Verificar idempotência no Redis
             redis = get_redis()
             is_new = await check_idempotency(redis, event_id)
 
@@ -90,14 +72,11 @@ class IdempotencyMiddleware(BaseHTTPMiddleware):
                     headers={"X-Event-Id": event_id},
                 )
 
-            # Injetar event_id e body no state do request para uso downstream
             request.state.event_id = event_id
             request.state._body = body.decode('utf-8') if body else None
 
-            # Processar request normalmente
             response = await call_next(request)
 
-            # Adicionar header X-Event-Id na response
             response.headers["X-Event-Id"] = event_id
 
             return response
@@ -105,8 +84,6 @@ class IdempotencyMiddleware(BaseHTTPMiddleware):
         except RuntimeError as e:
             if "Redis" in str(e):
                 logger.error(f"Redis indisponível no middleware: {e}")
-                # Em caso de falha do Redis, permitir o request (fail-open)
-                # para não derrubar o serviço por indisponibilidade do cache
                 logger.warning("Redis indisponível — bypass de idempotência (fail-open)")
                 log_audit_event(
                     action="REDIS_FAIL_OPEN",

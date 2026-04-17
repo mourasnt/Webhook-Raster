@@ -4,7 +4,7 @@ from sqlalchemy import DateTime, Integer, String, Text
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
-from db import Base
+from core.database import Base
 
 
 class WebhookEvent(Base):
@@ -22,7 +22,6 @@ class WebhookEvent(Base):
     cpf_encrypted: Mapped[str | None] = mapped_column(Text)
     placa_hash: Mapped[str | None] = mapped_column(String(64), index=True)
     cpf_hash: Mapped[str | None] = mapped_column(String(64), index=True)
-    
-    # Google Drive integration
+
     drive_file_id: Mapped[str | None] = mapped_column(String(255), index=True)
     drive_file_url: Mapped[str | None] = mapped_column(Text)

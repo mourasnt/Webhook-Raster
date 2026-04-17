@@ -1,72 +1,45 @@
-import hashlib
 import logging
-import re
-from datetime import timedelta, datetime
+from datetime import datetime, timedelta
 from typing import Any
 
 from sqlalchemy import delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from config import settings
-from db_models import WebhookEvent
-from lgpd import decrypt_value, desanitize_payload, encrypt_value, sanitize_payload
-from security import now_sp
+from core.crypto import (
+    decrypt_value,
+    desanitize_payload,
+    encrypt_value,
+    hash_value,
+    normalize_cpf,
+    normalize_placa,
+    now_sp,
+    sanitize_payload,
+)
+from core.database_models import WebhookEvent
+from src.config import settings
 
 logger = logging.getLogger(__name__)
 
 
-def _normalize_placa(value: str | None) -> str | None:
-    if not value:
-        return None
-    normalized = re.sub(r"[^A-Za-z0-9]", "", value).upper()
-    return normalized or None
-
-
-def _normalize_cpf(value: str | None) -> str | None:
-    if not value:
-        return None
-    normalized = re.sub(r"\D", "", value)
-    return normalized or None
-
-
-def _hash_value(value: str | None) -> str | None:
-    if not value:
-        return None
-    return hashlib.sha256(value.encode("utf-8")).hexdigest()
-
-
 def _extract_placa(payload: dict[str, Any]) -> str | None:
-    """Extrai placa do payload.
-    
-    Para CHECKLIST/RESULTADOCHECKLIST: usa campo 'placa'
-    Para PESQUISACONCULTA: usa campo 'identification' SE identification_type == 'V'
-    """
     placa = payload.get("placa")
     if placa and isinstance(placa, str):
         return placa
-    
-    # Para PESQUISACONCULTA com veículos
+
     identification_type = payload.get("identification_type")
     if identification_type == "V" or identification_type == "C":
         identification = payload.get("identification")
         return identification if isinstance(identification, str) and identification else None
-    
+
     return None
 
 
 def _extract_cpf(payload: dict[str, Any]) -> str | None:
-    """Extrai CPF/CNPJ do payload.
-    
-    Para PESQUISACONCULTA: usa campo 'identification' SE identification_type != 'V'
-    (V = Veículo, então não é CPF)
-    """
     identification_type = payload.get("identification_type")
-    
-    # Se for veículo, não é CPF
+
     if identification_type == "V" or identification_type == "C":
         return None
-    
-    # Para PESQUISACONCULTA com pessoas (C, P, etc.) ou sem tipo definido
+
     identification = payload.get("identification")
     return identification if isinstance(identification, str) and identification else None
 
@@ -85,9 +58,8 @@ def _serialize_event(event: WebhookEvent) -> dict[str, Any]:
 
 
 def _serialize_placa_event(event: WebhookEvent) -> dict[str, Any]:
-    """Serializa evento com campos relevantes para lista de placas."""
     payload = desanitize_payload(event.payload)
-    
+
     result = {
         "id": event.id,
         "webhook_type": event.webhook_type,
@@ -95,24 +67,22 @@ def _serialize_placa_event(event: WebhookEvent) -> dict[str, Any]:
         "event_id": event.event_id,
         "source_ip": event.source_ip,
     }
-    
-    # Adiciona campos específicos do payload baseado no tipo de webhook
+
     if event.webhook_type in ("CHECKLIST", "RESULTADOCHECKLIST"):
         result["codchecklist"] = payload.get("codchecklist")
-        
+
         if event.webhook_type == "RESULTADOCHECKLIST":
             result["resultado"] = payload.get("resultado")
             result["codresultado"] = payload.get("codresultado")
             result["dataexpiracao"] = payload.get("dataexpiracao")
             result["produtos"] = payload.get("produtos", [])
-    
+
     return result
 
 
 def _serialize_cpf_event(event: WebhookEvent) -> dict[str, Any]:
-    """Serializa evento com campos relevantes para lista de CPFs."""
     payload = desanitize_payload(event.payload)
-    
+
     result = {
         "id": event.id,
         "webhook_type": event.webhook_type,
@@ -121,7 +91,6 @@ def _serialize_cpf_event(event: WebhookEvent) -> dict[str, Any]:
         "source_ip": event.source_ip,
     }
 
-    # Adiciona campos específicos do payload para PESQUISACONCULTA
     if event.webhook_type == "PESQUISACONCULTA":
         result["pesquisa_id"] = payload.get("id")
         result["identification_type"] = payload.get("identification_type")
@@ -132,7 +101,7 @@ def _serialize_cpf_event(event: WebhookEvent) -> dict[str, Any]:
         result["end_date"] = payload.get("end_date")
         result["reasons"] = payload.get("reasons")
         result["service"] = payload.get("service")
-    
+
     return result
 
 
@@ -146,14 +115,13 @@ async def save_webhook_event(
     drive_file_id: str | None = None,
     drive_file_url: str | None = None,
 ) -> int:
-    """Persiste o webhook no Postgres com dados criptografados."""
     safe_payload = sanitize_payload(payload)
 
     placa = _extract_placa(payload)
     cpf = _extract_cpf(payload)
 
-    placa_norm = _normalize_placa(placa)
-    cpf_norm = _normalize_cpf(cpf)
+    placa_norm = normalize_placa(placa)
+    cpf_norm = normalize_cpf(cpf)
 
     event = WebhookEvent(
         webhook_type=webhook_type,
@@ -163,8 +131,8 @@ async def save_webhook_event(
         payload=safe_payload,
         placa_encrypted=encrypt_value(placa) if placa else None,
         cpf_encrypted=encrypt_value(cpf) if cpf else None,
-        placa_hash=_hash_value(placa_norm),
-        cpf_hash=_hash_value(cpf_norm),
+        placa_hash=hash_value(placa_norm),
+        cpf_hash=hash_value(cpf_norm),
         drive_file_id=drive_file_id,
         drive_file_url=drive_file_url,
     )
@@ -176,8 +144,8 @@ async def save_webhook_event(
 
 
 async def search_by_placa(session: AsyncSession, placa: str) -> list[dict[str, Any]]:
-    placa_norm = _normalize_placa(placa)
-    placa_hash = _hash_value(placa_norm)
+    placa_norm = normalize_placa(placa)
+    placa_hash = hash_value(placa_norm)
     if not placa_hash:
         return []
 
@@ -192,8 +160,8 @@ async def search_by_placa(session: AsyncSession, placa: str) -> list[dict[str, A
 
 
 async def search_by_cpf(session: AsyncSession, cpf: str) -> list[dict[str, Any]]:
-    cpf_norm = _normalize_cpf(cpf)
-    cpf_hash = _hash_value(cpf_norm)
+    cpf_norm = normalize_cpf(cpf)
+    cpf_hash = hash_value(cpf_norm)
     if not cpf_hash:
         return []
 
@@ -224,13 +192,8 @@ async def list_all_placas(session: AsyncSession) -> list[str]:
 
     return sorted(set(placas))
 
+
 async def list_dados_placas(session: AsyncSession) -> list[dict[str, Any]]:
-    """Lista todos os dados agrupados por placa com pesquisas e checklists separados.
-    
-    Inclui:
-    - CHECKLIST e RESULTADOCHECKLIST (sempre têm placa)
-    - PESQUISACONCULTA onde identification_type = 'V' (veículos)
-    """
     stmt = (
         select(WebhookEvent)
         .where(
@@ -241,35 +204,31 @@ async def list_dados_placas(session: AsyncSession) -> list[dict[str, Any]]:
     )
     result = await session.execute(stmt)
     events = result.scalars().all()
-    
-    # Agrupa eventos por placa_hash
+
     grouped: dict[str, list[WebhookEvent]] = {}
     for event in events:
         if event.placa_hash:
             if event.placa_hash not in grouped:
                 grouped[event.placa_hash] = []
             grouped[event.placa_hash].append(event)
-    
-    # Constrói a lista de dados por placa
+
     placas_data: list[dict[str, Any]] = []
-    
+
     for placa_hash, placa_events in grouped.items():
-        # Descriptografa a placa (pega o primeiro evento com placa_encrypted)
         placa_decrypted = None
         for event in placa_events:
             if event.placa_encrypted:
                 placa_decrypted = decrypt_value(event.placa_encrypted)
                 if placa_decrypted and not placa_decrypted.startswith("["):
                     break
-        
+
         if not placa_decrypted:
             continue
-        
-        # Separa eventos por tipo
+
         pesquisas = []
         checklists = []
         consultas_veiculo = []
-        
+
         for event in placa_events:
             if event.webhook_type == "CHECKLIST":
                 serialized = _serialize_placa_event(event)
@@ -278,40 +237,35 @@ async def list_dados_placas(session: AsyncSession) -> list[dict[str, Any]]:
                 serialized = _serialize_placa_event(event)
                 checklists.append(serialized)
             elif event.webhook_type == "PESQUISACONCULTA":
-                # Inclui consultas de veículos
-                serialized = _serialize_cpf_event(event)  # Usa serialização de CPF que tem campos de PESQUISACONCULTA
+                serialized = _serialize_cpf_event(event)
                 consultas_veiculo.append(serialized)
-        
-        # Ordena por data (mais recente primeiro)
+
         pesquisas.sort(key=lambda e: e["received_at"], reverse=True)
         checklists.sort(key=lambda e: e["received_at"], reverse=True)
         consultas_veiculo.sort(key=lambda e: e["received_at"], reverse=True)
-        
-        # Calcula estatísticas
+
         total_events = len(pesquisas) + len(checklists) + len(consultas_veiculo)
         last_event_at = max(
             (e.received_at for e in placa_events),
             key=lambda dt: dt,
             default=None
         )
-        
+
         placas_data.append({
             "placa": placa_decrypted,
             "pesquisas": pesquisas,
             "checklists": checklists,
-            "consultas": consultas_veiculo,  # Adiciona consultas de veículos
+            "consultas": consultas_veiculo,
             "total_events": total_events,
             "last_event_at": last_event_at.isoformat() if last_event_at else None,
         })
-    
-    # Ordena alfabeticamente por placa
+
     placas_data.sort(key=lambda p: p["placa"])
-    
+
     return placas_data
 
 
 async def list_dados_cpfs(session: AsyncSession) -> list[dict[str, Any]]:
-    """Lista todos os dados agrupados por CPF com consultas PESQUISACONCULTA."""
     stmt = (
         select(WebhookEvent)
         .where(
@@ -322,57 +276,50 @@ async def list_dados_cpfs(session: AsyncSession) -> list[dict[str, Any]]:
     )
     result = await session.execute(stmt)
     events = result.scalars().all()
-    
-    # Agrupa eventos por cpf_hash
+
     grouped: dict[str, list[WebhookEvent]] = {}
     for event in events:
         if event.cpf_hash:
             if event.cpf_hash not in grouped:
                 grouped[event.cpf_hash] = []
             grouped[event.cpf_hash].append(event)
-    
-    # Constrói a lista de dados por CPF
+
     cpfs_data: list[dict[str, Any]] = []
-    
+
     for cpf_hash, cpf_events in grouped.items():
-        # Descriptografa o CPF (pega o primeiro evento com cpf_encrypted)
         cpf_decrypted = None
         for event in cpf_events:
             if event.cpf_encrypted:
                 cpf_decrypted = decrypt_value(event.cpf_encrypted)
                 if cpf_decrypted and not cpf_decrypted.startswith("["):
                     break
-        
+
         if not cpf_decrypted:
             continue
-        
-        # Serializa todos os eventos
+
         consultas = []
         for event in cpf_events:
             serialized = _serialize_cpf_event(event)
             consultas.append(serialized)
-        
-        # Ordena por data (mais recente primeiro)
+
         consultas.sort(key=lambda e: e["received_at"], reverse=True)
-        
-        # Calcula estatísticas
+
         total_events = len(consultas)
         last_event_at = max(
             (e.received_at for e in cpf_events),
             key=lambda dt: dt,
             default=None
         )
-        
+
         cpfs_data.append({
             "cpf": cpf_decrypted,
             "consultas": consultas,
             "total_events": total_events,
             "last_event_at": last_event_at.isoformat() if last_event_at else None,
         })
-    
-    # Ordena alfabeticamente por CPF
+
     cpfs_data.sort(key=lambda c: c["cpf"])
-    
+
     return cpfs_data
 
 

@@ -1,6 +1,8 @@
+version: "4"
+
 services:
   postgres:
-    image: postgres:16-alpine
+    image: docker.io/library/postgres:16-alpine
     container_name: raster-postgres
     restart: unless-stopped
     environment:
@@ -19,10 +21,9 @@ services:
       - webhook-net
 
   redis:
-    image: redis:7-alpine
+    image: docker.io/library/redis:7-alpine
     container_name: raster-redis
     restart: unless-stopped
-    # Sem "ports:" — Redis acessível APENAS na rede interna Docker
     networks:
       - webhook-net
     volumes:
@@ -37,6 +38,7 @@ services:
 
   webhook-api:
     build: .
+    image: raster-webhook-api:latest
     container_name: raster-webhook-api
     restart: unless-stopped
     ports:
@@ -44,6 +46,11 @@ services:
     environment:
       - DATABASE_URL=postgresql+asyncpg://postgres:postgres@postgres:5432/webhooks
       - REDIS_URL=redis://redis:6379/0
+      - WHATSAPP_ENABLED=true
+      - WHATSAPP_API_URL=http://5.78.121.199:8080
+      - WHATSAPP_INSTANCE=Spots
+      - WHATSAPP_API_KEY=Senh@Segura123
+      - WHATSAPP_DESTINATION=5511931664049
       - REDIS_RATE_LIMIT_URL=redis://redis:6379/1
       - EVENT_TTL_SECONDS=86400
       - RATE_LIMIT=100/minute
@@ -63,7 +70,6 @@ services:
       - webhook-net
     volumes:
       - webhook-logs:/app/logs
-      - ./credentials.json:/app/credentials.json:ro
 
 networks:
   webhook-net:
