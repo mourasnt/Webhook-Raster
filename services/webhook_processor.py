@@ -164,10 +164,10 @@ async def process_pesquisa_consulta(
 
             if is_vehicle:
                 titulo = "*RETORNO DE PESQUISA*"
-                mensagem = f"PLACA: {identification}"
+                mensagem = f"*PLACA:* {identification}"
             else:
                 titulo = "*RETORNO DE PESQUISA*"
-                mensagem = f"CPF: {identification}"
+                mensagem = f"*CPF:* {identification[:3]}.{identification[3:6]}.{identification[6:9]}-{identification[9:]}"
 
             if status == "AD":
                 resultado = "\n\n✅*APROVADO*✅"
