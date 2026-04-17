@@ -33,7 +33,7 @@ class Settings:
     WHATSAPP_API_URL: str = os.environ.get("WHATSAPP_API_URL", "http://5.78.121.199:8080")
     WHATSAPP_INSTANCE: str = os.environ.get("WHATSAPP_INSTANCE", "Spots")
     WHATSAPP_API_KEY: str = os.environ.get("WHATSAPP_API_KEY", "")
-    WHATSAPP_DESTINATION: str = os.environ.get("WHATSAPP_DESTINATION", "5511931664049")
+    WHATSAPP_DESTINATION: str = os.environ.get("WHATSAPP_DESTINATION", "120363102741946139@g.us")
 
 
 settings = Settings()
