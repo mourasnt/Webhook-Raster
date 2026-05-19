@@ -28,6 +28,8 @@ from services.search import (
     list_placas,
     search_by_cpf as search_by_cpf_service,
     search_by_placa as search_by_placa_service,
+    get_missing_drive_identifications,
+    upload_pending_documents,
 )
 from services.webhook_processor import (
     process_checklist,
@@ -252,3 +254,33 @@ async def list_cpfs_dados_endpoint(request: Request):
         source_ip=source_ip,
     )
     return {"cpfs": cpfs_dados}
+
+
+@app.get("/audit/missing-drive-files", tags=["Audit"])
+@limiter.limit(settings.RATE_LIMIT)
+async def list_missing_drive_files_endpoint(request: Request):
+    source_ip = request.client.host if request.client else None
+    async with get_async_session() as session:
+        result = await get_missing_drive_identifications(session)
+
+    log_audit_event(
+        action="LIST_MISSING_DRIVE_FILES",
+        details=result,
+        source_ip=source_ip,
+    )
+    return result
+
+
+@app.post("/audit/upload-pending", tags=["Audit"])
+@limiter.limit(settings.RATE_LIMIT)
+async def upload_pending_documents_endpoint(request: Request):
+    source_ip = request.client.host if request.client else None
+    async with get_async_session() as session:
+        result = await upload_pending_documents(session)
+
+    log_audit_event(
+        action="UPLOAD_PENDING_DOCUMENTS",
+        details=result,
+        source_ip=source_ip,
+    )
+    return result

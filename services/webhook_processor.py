@@ -160,7 +160,7 @@ async def process_pesquisa_consulta(
             identification = payload.get("identification", "")
             status = payload.get("situation", "")
 
-            is_vehicle = identification_type == "V"
+            is_vehicle = identification_type != "P"
 
             if is_vehicle:
                 titulo = "*RETORNO DE PESQUISA*"

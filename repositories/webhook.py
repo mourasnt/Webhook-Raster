@@ -350,3 +350,178 @@ async def purge_old_db_entries(session: AsyncSession) -> int:
     if removed > 0:
         logger.info(f"Retencao DB: {removed} registros removidos")
     return removed
+
+
+async def get_db_identifications_with_expiry(session: AsyncSession) -> list[dict[str, Any]]:
+    """
+    Busca todos os registros com drive_file_id setado e situation=AD (APROVADO).
+    Extrai identification + expiration_date do payload.
+    
+    Retorna: [
+        {"identification": "ABC1234", "validity_date": "2026-10-20", "type": "placa"},
+        {"identification": "251.967.558-61", "validity_date": "2026-10-20", "type": "cpf"},
+    ]
+    """
+    stmt = (
+        select(WebhookEvent)
+        .where(WebhookEvent.drive_file_id.is_not(None))
+    )
+    result = await session.execute(stmt)
+    events = result.scalars().all()
+    
+    identifications: list[dict[str, Any]] = []
+    
+    for event in events:
+        payload = desanitize_payload(event.payload)
+        
+        identification = None
+        validity_date = None
+        id_type = None
+        
+        if event.webhook_type == "PESQUISACONCULTA":
+            situation = payload.get("situation")
+            if situation != "AD":
+                continue
+            
+            identification = payload.get("identification")
+            validity_date = payload.get("expiration_date")
+            if payload.get("identification_type") in ("V", "C"):
+                id_type = "placa"
+            else:
+                id_type = "cpf"
+        elif event.webhook_type in ("CHECKLIST", "RESULTADOCHECKLIST"):
+            identification = payload.get("codchecklist")
+            validity_date = payload.get("dataexpiracao")
+            id_type = "placa"
+        
+        if identification and validity_date:
+            identifications.append({
+                "identification": identification,
+                "validity_date": validity_date,
+                "type": id_type,
+            })
+    
+    return identifications
+
+
+async def get_all_approved_identifications(session: AsyncSession) -> list[dict[str, Any]]:
+    """
+    Busca TODOS os registros com situation=AD (APROVADO), independente de ter drive_file_id.
+    Usado para comparar com arquivos do Drive e encontrar pendentes.
+    
+    Retorna: [
+        {"id": 1, "identification": "ABC1234", "validity_date": "2026-10-20", "type": "placa", "base64": "..."},
+    ]
+    """
+    stmt = (
+        select(WebhookEvent)
+        .where(WebhookEvent.webhook_type == "PESQUISACONCULTA")
+    )
+    result = await session.execute(stmt)
+    events = result.scalars().all()
+    
+    identifications: list[dict[str, Any]] = []
+    
+    for event in events:
+        payload = desanitize_payload(event.payload)
+        
+        situation = payload.get("situation")
+        if situation != "AD":
+            continue
+        
+        identification = payload.get("identification")
+        validity_date = payload.get("expiration_date")
+        base64_data = payload.get("base64")
+        identification_type = payload.get("identification_type", "")
+        
+        if identification_type in ("V", "C"):
+            id_type = "placa"
+        else:
+            id_type = "cpf"
+        
+        if identification and validity_date:
+            identifications.append({
+                "id": event.id,
+                "identification": identification,
+                "validity_date": validity_date,
+                "type": id_type,
+                "base64": base64_data,
+                "drive_file_id": event.drive_file_id,
+            })
+    
+    return identifications
+    """
+    Busca registros com situation=AD (APROVADO) mas sem drive_file_id.
+    Estes registros precisam fazer upload para o Drive.
+    
+    Retorna: [
+        {"id": 1, "identification": "ABC1234", "validity_date": "2026-10-20", "type": "placa", "base64": "..."},
+    ]
+    """
+    from sqlalchemy import or_
+    
+    stmt = (
+        select(WebhookEvent)
+        .where(
+            WebhookEvent.drive_file_id.is_(None),
+            or_(
+                WebhookEvent.webhook_type == "PESQUISACONCULTA",
+                WebhookEvent.webhook_type.in_(["CHECKLIST", "RESULTADOCHECKLIST"])
+            )
+        )
+    )
+    result = await session.execute(stmt)
+    events = result.scalars().all()
+    
+    records: list[dict[str, Any]] = []
+    
+    for event in events:
+        payload = desanitize_payload(event.payload)
+        
+        identification = None
+        validity_date = None
+        id_type = None
+        base64_data = payload.get("base64")
+        
+        if event.webhook_type == "PESQUISACONCULTA":
+            situation = payload.get("situation")
+            if situation != "AD":
+                continue
+            
+            identification = payload.get("identification")
+            validity_date = payload.get("expiration_date")
+            if payload.get("identification_type") in ("V", "C"):
+                id_type = "placa"
+            else:
+                id_type = "cpf"
+        elif event.webhook_type in ("CHECKLIST", "RESULTADOCHECKLIST"):
+            identification = payload.get("codchecklist")
+            validity_date = payload.get("dataexpiracao")
+            id_type = "placa"
+        
+        if identification and validity_date and base64_data:
+            records.append({
+                "id": event.id,
+                "identification": identification,
+                "validity_date": validity_date,
+                "type": id_type,
+                "base64": base64_data,
+            })
+    
+    return records
+
+
+async def update_drive_file(session: AsyncSession, event_id: int, drive_file_id: str, drive_file_url: str) -> bool:
+    """
+    Atualiza o registro com drive_file_id e drive_file_url após upload.
+    """
+    from sqlalchemy import update as sql_update
+    
+    stmt = (
+        sql_update(WebhookEvent)
+        .where(WebhookEvent.id == event_id)
+        .values(drive_file_id=drive_file_id, drive_file_url=drive_file_url)
+    )
+    await session.execute(stmt)
+    await session.commit()
+    return True

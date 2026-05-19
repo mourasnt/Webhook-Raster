@@ -41,7 +41,7 @@ async def send_whatsapp_message(text: str, phone: Optional[str] = None) -> bool:
 
         response = requests.post(url, json=payload, headers=headers, timeout=10)
 
-        if response.status_code == 200:
+        if response.status_code in (200, 201):
             logger.info(f"Mensagem WhatsApp enviada para {phone}")
             return True
         else:

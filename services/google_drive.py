@@ -1,7 +1,10 @@
 import base64
+import functools
 import io
 import json
 import logging
+import re
+import time
 from datetime import datetime
 from typing import Tuple, Optional
 
@@ -9,10 +12,39 @@ from google.oauth2 import service_account
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaIoBaseUpload
 from googleapiclient.errors import HttpError
+try:
+    from ssl import SSLError
+except ImportError:
+    SSLError = Exception
 
 from src.config import settings
 
 logger = logging.getLogger(__name__)
+
+
+def _retry_on_network_error(max_retries=3, base_delay=1):
+    """Decorator para retry em erros de rede."""
+    def decorator(func):
+        @functools.wraps(func)
+        def wrapper(*args, **kwargs):
+            network_errors = (ConnectionError, BrokenPipeError, TimeoutError, OSError, SSLError)
+            last_exception = None
+            
+            for attempt in range(max_retries):
+                try:
+                    return func(*args, **kwargs)
+                except network_errors as e:
+                    last_exception = e
+                    if attempt < max_retries - 1:
+                        delay = base_delay * (2 ** attempt)
+                        logger.warning(f"Erro de rede (tentativa {attempt + 1}/{max_retries}), retry em {delay}s: {e}")
+                        time.sleep(delay)
+                    else:
+                        raise
+            
+            raise last_exception
+        return wrapper
+    return decorator
 
 _drive_service = None
 
@@ -122,6 +154,7 @@ def format_filename(identification: str, expiration_date: str) -> str:
     return f"{identification} - VALIDADE ({formatted_date})"
 
 
+@_retry_on_network_error(max_retries=3, base_delay=1)
 def upload_document(
     base64_data: str,
     identification: str,
@@ -220,3 +253,57 @@ def get_file_info(file_id: str) -> Optional[dict]:
     except Exception as e:
         logger.error(f"Erro inesperado ao obter informações do arquivo {file_id}: {e}")
         return None
+
+
+def list_drive_identifications() -> set[tuple[str, str]]:
+    """
+    Lista todas as identificações existentes no Drive.
+    Retorna: {(identification, validity_date), ...}
+    
+    Extrai do nome: "ABC1234 - VALIDADE (20-10-2026).pdf" → ("ABC1234", "2026-10-20")
+    """
+    identifications: set[tuple[str, str]] = set()
+    
+    try:
+        service = _get_drive_service()
+        
+        target_folder = settings.GOOGLE_DRIVE_FOLDER_ID
+        if target_folder:
+            query = f"'{target_folder}' in parents and trashed=false"
+        else:
+            query = "trashed=false"
+        
+        page_token = None
+        while True:
+            results = service.files().list(
+                q=query,
+                fields="nextPageToken, files(id, name)",
+                pageSize=100,
+                pageToken=page_token,
+                supportsAllDrives=True,
+                includeItemsFromAllDrives=True
+            ).execute()
+            
+            files_list = results.get("files", [])
+            if not files_list:
+                break
+            
+            for file in files_list:
+                name = file.get("name", "")
+                match = re.search(r"^(.+?)\s*-\s*VALIDADE\s*\((\d{2}-\d{2}-\d{4})\)\.", name, re.IGNORECASE)
+                if match:
+                    identification = match.group(1).strip()
+                    date_str = match.group(2)
+                    validity_date = datetime.strptime(date_str, "%d-%m-%Y").strftime("%Y-%m-%d")
+                    identifications.add((identification, validity_date))
+            
+            page_token = results.get("nextPageToken")
+            if not page_token:
+                break
+        
+        logger.info(f"Identificações extraídas do Drive: {len(identifications)}")
+        
+    except Exception as e:
+        logger.error(f"Erro ao listar identificações do Drive: {e}")
+    
+    return identifications
