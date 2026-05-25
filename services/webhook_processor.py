@@ -9,6 +9,7 @@ from core.crypto import now_sp, now_sp_str, sanitize_payload
 from core.database import get_async_session
 from repositories.webhook import save_webhook_event
 from schemas.webhook import ChecklistPayload, PesquisaConsultaPayload, ResultadoChecklistPayload
+from services.cadastro_integration import notify_cadastro
 from services.google_drive import upload_document
 from services.whatsapp import send_whatsapp_message
 from src.config import settings
@@ -176,6 +177,17 @@ async def process_pesquisa_consulta(
 
             message = f"{titulo}\n\n{mensagem}{resultado}"
             await send_whatsapp_message(message)
+
+        try:
+            await notify_cadastro(
+                identification=payload.get("identification", ""),
+                identification_type=payload.get("identification_type"),
+                situation=payload.get("situation"),
+                expiration_date=payload.get("expiration_date"),
+                base64_data=payload.get("base64"),
+            )
+        except Exception as e:
+            logger.warning("Falha ao notificar Cadastro API (fluxo continua): %s", e)
 
         log_audit_event(
             action="WEBHOOK_RECEIVED",

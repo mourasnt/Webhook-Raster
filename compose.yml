@@ -44,7 +44,7 @@ services:
     ports:
       - "1214:8000"
     environment:
-      - DATABASE_URL=postgresql+asyncpg://postgres:postgres@postgres:5432/webhooks
+      - DATABASE_URL=postgresql+asyncpg://postgres:postgres@raster-postgres:5432/webhooks
       - REDIS_URL=redis://redis:6379/0
       - WHATSAPP_ENABLED=true
       - WHATSAPP_API_URL=http://5.78.121.199:8080
@@ -61,6 +61,9 @@ services:
       - ENCRYPTION_KEY=_3-MRU8UvuARYWKqWoXQtFZVI8EOJMFwENdAWFwyP-g=
       - GOOGLE_DRIVE_FOLDER_ID=0AIjOcO48LrX1Uk9PVA
       - GOOGLE_CREDENTIALS_FILE=credentials.json
+      - CADASTRO_API_URL=http://cadastro:8000
+      - CADASTRO_USERNAME=${CADASTRO_USERNAME:-admin}
+      - CADASTRO_PASSWORD=${CADASTRO_PASSWORD}
     depends_on:
       postgres:
         condition: service_healthy
@@ -68,12 +71,16 @@ services:
         condition: service_healthy
     networks:
       - webhook-net
+      - cadastro_network
     volumes:
       - webhook-logs:/app/logs
 
 networks:
   webhook-net:
     driver: bridge
+  cadastro_network:
+    external: true
+    name: cadastro_cadastro_network
 
 volumes:
   postgres-data:

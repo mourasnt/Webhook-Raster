@@ -35,5 +35,9 @@ class Settings:
     WHATSAPP_API_KEY: str = os.environ.get("WHATSAPP_API_KEY", "")
     WHATSAPP_DESTINATION: str = os.environ.get("WHATSAPP_DESTINATION", "120363102741946139@g.us")
 
+    CADASTRO_API_URL: str = os.environ.get("CADASTRO_API_URL", "http://cadastro:8000")
+    CADASTRO_USERNAME: str = os.environ.get("CADASTRO_USERNAME", "admin")
+    CADASTRO_PASSWORD: str = os.environ.get("CADASTRO_PASSWORD", "")
+
 
 settings = Settings()
