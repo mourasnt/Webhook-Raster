@@ -72,6 +72,41 @@ async def _obter_token() -> Optional[str]:
     return None
 
 
+async def buscar_nome_motorista(cpf: str) -> Optional[str]:
+    token = await _obter_token()
+    if not token:
+        return None
+
+    cpf_digits = "".join(c for c in cpf if c.isdigit())
+    base_url = settings.CADASTRO_API_URL.rstrip("/")
+    headers = {"Authorization": f"Bearer {token}"}
+
+    try:
+        async with httpx.AsyncClient(timeout=10) as client:
+            resp = await client.get(
+                f"{base_url}/motoristas",
+                params={"$filter": f"cpf eq '{cpf_digits}'", "$top": 1, "$count": "true"},
+                headers=headers,
+            )
+            if resp.is_success:
+                data = resp.json()
+                items = data.get("value", [])
+                if items:
+                    nome = items[0].get("nome")
+                    if nome:
+                        logger.info("Nome encontrado para CPF %s: %s", cpf_digits, nome)
+                        return nome
+                logger.info("Motorista não encontrado no Cadastro para CPF %s", cpf_digits)
+            else:
+                logger.warning(
+                    "Cadastro API retornou %s ao buscar motorista: %s",
+                    resp.status_code, resp.text[:200],
+                )
+    except Exception as e:
+        logger.error("Erro ao buscar nome do motorista no Cadastro API: %s", e)
+    return None
+
+
 async def notify_cadastro(
     identification: str,
     identification_type: Optional[str],

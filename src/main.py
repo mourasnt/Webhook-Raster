@@ -31,6 +31,7 @@ from services.search import (
     get_missing_drive_identifications,
     upload_pending_documents,
 )
+from services.kafka_producer import RasterEventProducer
 from services.webhook_processor import (
     process_checklist,
     process_pesquisa_consulta,
@@ -57,9 +58,11 @@ async def lifespan(app: FastAPI):
     await startup_redis()
     await startup_db()
     await init_db()
+    await RasterEventProducer.start()
 
     yield
 
+    await RasterEventProducer.stop()
     await shutdown_redis()
     await shutdown_db()
     logger.info("Lifecycle → shutdown concluído")

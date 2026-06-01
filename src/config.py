@@ -39,5 +39,7 @@ class Settings:
     CADASTRO_USERNAME: str = os.environ.get("CADASTRO_USERNAME", "admin")
     CADASTRO_PASSWORD: str = os.environ.get("CADASTRO_PASSWORD", "")
 
+    KAFKA_BOOTSTRAP_SERVERS: str = os.environ.get("KAFKA_BOOTSTRAP_SERVERS", "localhost:9092")
+
 
 settings = Settings()

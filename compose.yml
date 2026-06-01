@@ -62,8 +62,9 @@ services:
       - GOOGLE_DRIVE_FOLDER_ID=0AIjOcO48LrX1Uk9PVA
       - GOOGLE_CREDENTIALS_FILE=credentials.json
       - CADASTRO_API_URL=http://cadastro:8000
-      - CADASTRO_USERNAME=${CADASTRO_USERNAME:-admin}
-      - CADASTRO_PASSWORD=${CADASTRO_PASSWORD}
+      - CADASTRO_USERNAME=admin
+      - CADASTRO_PASSWORD=cadastro2024
+      - KAFKA_BOOTSTRAP_SERVERS=kafka:9092
     depends_on:
       postgres:
         condition: service_healthy
@@ -72,6 +73,7 @@ services:
     networks:
       - webhook-net
       - cadastro_network
+      - ops-core_network
     volumes:
       - webhook-logs:/app/logs
 
@@ -81,6 +83,9 @@ networks:
   cadastro_network:
     external: true
     name: cadastro_cadastro_network
+  ops-core_network:
+    external: true
+    name: ops-core_default
 
 volumes:
   postgres-data:

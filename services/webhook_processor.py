@@ -9,8 +9,9 @@ from core.crypto import now_sp, now_sp_str, sanitize_payload
 from core.database import get_async_session
 from repositories.webhook import save_webhook_event
 from schemas.webhook import ChecklistPayload, PesquisaConsultaPayload, ResultadoChecklistPayload
-from services.cadastro_integration import notify_cadastro
+from services.cadastro_integration import buscar_nome_motorista, notify_cadastro
 from services.google_drive import upload_document
+from services.kafka_producer import RasterEventProducer
 from services.whatsapp import send_whatsapp_message
 from src.config import settings
 
@@ -36,6 +37,8 @@ async def process_checklist(
                 received_at_dt,
                 source_ip,
             )
+
+        await RasterEventProducer.publicar_checklist_completed(payload)
 
         logger.info(f"Checklist recebido e salvo: {payload.get('codchecklist')}")
         log_audit_event(
@@ -80,6 +83,8 @@ async def process_resultado_checklist(
                 received_at_dt,
                 source_ip,
             )
+
+        await RasterEventProducer.publicar_resultado_checklist(payload)
 
         logger.info(f"Resultado Checklist recebido e salvo: {payload.get('codchecklist')}")
         log_audit_event(
@@ -162,6 +167,10 @@ async def process_pesquisa_consulta(
             status = payload.get("situation", "")
 
             is_vehicle = identification_type != "P"
+            nome_motorista = None
+
+            if not is_vehicle:
+                nome_motorista = await buscar_nome_motorista(identification)
 
             if is_vehicle:
                 titulo = "*RETORNO DE PESQUISA*"
@@ -169,6 +178,8 @@ async def process_pesquisa_consulta(
             else:
                 titulo = "*RETORNO DE PESQUISA*"
                 mensagem = f"*CPF:* {identification[:3]}.{identification[3:6]}.{identification[6:9]}-{identification[9:]}"
+                if nome_motorista:
+                    mensagem = f"*NOME:* {nome_motorista}\n{mensagem}"
 
             if status == "AD":
                 resultado = "\n\n✅*APROVADO*✅"
@@ -177,6 +188,14 @@ async def process_pesquisa_consulta(
 
             message = f"{titulo}\n\n{mensagem}{resultado}"
             await send_whatsapp_message(message)
+
+        await RasterEventProducer.publicar_pesquisa_completed(
+            identification=payload.get("identification", ""),
+            identification_type=payload.get("identification_type"),
+            situation=payload.get("situation"),
+            expiration_date=payload.get("expiration_date"),
+            base64_data=payload.get("base64"),
+        )
 
         try:
             await notify_cadastro(
