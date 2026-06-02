@@ -159,31 +159,36 @@ async def upload_pending_documents(session: AsyncSession) -> dict[str, Any]:
 
 async def sync_cadastros(session: AsyncSession) -> dict[str, Any]:
     """
-    Publica eveto de todas as últimas pesquisas aprovadas
+    Publica evento de todas as pesquisas aprovadas
     """
-
     db_identifications = await repo.get_all_approved_identifications(session)
-    
-    
     logger.info(f"Total approved no DB: {len(db_identifications)}")
-    
-    for record in db_identifications:  
-        
+
+    published = 0
+    failed = 0
+
+    for record in db_identifications:
         if not record.get("base64"):
             logger.warning(f"Sem base64: {record['identification']}")
             continue
-        
+
+        raster_type = "V" if record["type"] == "placa" else None
+
         try:
             await RasterEventProducer.publicar_pesquisa_completed(
-            identification=record.get("identification", ""),
-            identification_type=record.get("identification_type"),
-            situation=record.get("situation"),
-            expiration_date=record.get("expiration_date"),
-            base64_data=record.get("base64"),
-        )
-                
+                identification=record["identification"],
+                identification_type=raster_type,
+                situation="AD",
+                expiration_date=record["validity_date"],
+                base64_data=record["base64"],
+            )
+            published += 1
         except Exception as e:
             logger.error(f"Erro ao publicar evento {record['identification']}: {e}")
             failed += 1
-    
-    return True
+
+    return {
+        "total": len(db_identifications),
+        "publicados": published,
+        "falhos": failed,
+    }
