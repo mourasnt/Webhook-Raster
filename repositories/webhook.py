@@ -452,6 +452,58 @@ async def get_all_approved_identifications(session: AsyncSession) -> list[dict[s
     
     return identifications
 
+async def get_all_identifications_latest_by_identificador(session: AsyncSession) -> list[dict[str, Any]]:
+    """
+    Busca o evento PESQUISACONCULTA mais recente (por received_at) para cada
+    identificador, independente da situation. Usado pelo sync_cadastros para
+    re-publicar o estado atual de todas as consultas.
+
+    Retorna: [
+        {"identification": "ABC1234", "validity_date": "2026-10-20",
+         "type": "placa", "base64": "...", "identification_type": "V",
+         "situation": "AD"},
+    ]
+    """
+    stmt = (
+        select(WebhookEvent)
+        .where(WebhookEvent.webhook_type == "PESQUISACONCULTA")
+        .order_by(WebhookEvent.received_at.desc())
+    )
+    result = await session.execute(stmt)
+    events = result.scalars().all()
+
+    seen: dict[str, dict[str, Any]] = {}
+    for event in events:
+        payload = desanitize_payload(event.payload)
+        identification = payload.get("identification")
+        if not identification:
+            continue
+
+        if identification in seen:
+            continue
+
+        validity_date = payload.get("expiration_date")
+        base64_data = payload.get("base64")
+        identification_type = payload.get("identification_type", "")
+        situation = payload.get("situation")
+
+        if identification_type in ("V", "C"):
+            id_type = "placa"
+        else:
+            id_type = "cpf"
+
+        seen[identification] = {
+            "identification": identification,
+            "validity_date": validity_date,
+            "type": id_type,
+            "base64": base64_data,
+            "identification_type": identification_type,
+            "situation": situation,
+        }
+
+    return list(seen.values())
+
+
 async def update_drive_file(session: AsyncSession, event_id: int, drive_file_id: str, drive_file_url: str) -> bool:
     """
     Atualiza o registro com drive_file_id e drive_file_url após upload.

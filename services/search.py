@@ -159,10 +159,10 @@ async def upload_pending_documents(session: AsyncSession) -> dict[str, Any]:
 
 async def sync_cadastros(session: AsyncSession) -> dict[str, Any]:
     """
-    Publica evento de todas as pesquisas aprovadas
+    Publica evento da situacao mais recente de todas as consultas (qualquer situacao).
     """
-    db_identifications = await repo.get_all_approved_identifications(session)
-    logger.info(f"Total approved no DB: {len(db_identifications)}")
+    db_identifications = await repo.get_all_identifications_latest_by_identificador(session)
+    logger.info(f"Total identificacoes no DB: {len(db_identifications)}")
 
     published = 0
     failed = 0
@@ -173,12 +173,13 @@ async def sync_cadastros(session: AsyncSession) -> dict[str, Any]:
             continue
 
         raster_type = record.get("identification_type") or None
+        situation = record.get("situation") or ""
 
         try:
             await RasterEventProducer.publicar_pesquisa_completed(
                 identification=record["identification"],
                 identification_type=raster_type,
-                situation="AD",
+                situation=situation,
                 expiration_date=record["validity_date"],
                 base64_data=record["base64"],
             )
