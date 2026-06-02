@@ -168,10 +168,6 @@ async def sync_cadastros(session: AsyncSession) -> dict[str, Any]:
     failed = 0
 
     for record in db_identifications:
-        if not record.get("base64"):
-            logger.warning(f"Sem base64: {record['identification']}")
-            continue
-
         raster_type = record.get("identification_type") or None
         situation = record.get("situation") or ""
 
@@ -181,7 +177,7 @@ async def sync_cadastros(session: AsyncSession) -> dict[str, Any]:
                 identification_type=raster_type,
                 situation=situation,
                 expiration_date=record["validity_date"],
-                base64_data=record["base64"],
+                base64_data=record.get("base64"),
             )
             published += 1
         except Exception as e:
