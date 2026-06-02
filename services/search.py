@@ -6,6 +6,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from repositories import webhook as repo
 from services import google_drive
 
+from services.kafka_producer import RasterEventProducer
+
 logger = logging.getLogger(__name__)
 
 
@@ -153,3 +155,35 @@ async def upload_pending_documents(session: AsyncSession) -> dict[str, Any]:
         "quantidade_cpfs": uploaded_cpfs,
         "falhos": failed,
     }
+
+
+async def sync_cadastros(session: AsyncSession) -> dict[str, Any]:
+    """
+    Publica eveto de todas as últimas pesquisas aprovadas
+    """
+
+    db_identifications = await repo.get_all_approved_identifications(session)
+    
+    
+    logger.info(f"Total approved no DB: {len(db_identifications)}")
+    
+    for record in db_identifications:  
+        
+        if not record.get("base64"):
+            logger.warning(f"Sem base64: {record['identification']}")
+            continue
+        
+        try:
+            await RasterEventProducer.publicar_pesquisa_completed(
+            identification=record.get("identification", ""),
+            identification_type=record.get("identification_type"),
+            situation=record.get("situation"),
+            expiration_date=record.get("expiration_date"),
+            base64_data=record.get("base64"),
+        )
+                
+        except Exception as e:
+            logger.error(f"Erro ao publicar evento {record['identification']}: {e}")
+            failed += 1
+    
+    return True

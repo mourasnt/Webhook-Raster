@@ -450,66 +450,6 @@ async def get_all_approved_identifications(session: AsyncSession) -> list[dict[s
             })
     
     return identifications
-    """
-    Busca registros com situation=AD (APROVADO) mas sem drive_file_id.
-    Estes registros precisam fazer upload para o Drive.
-    
-    Retorna: [
-        {"id": 1, "identification": "ABC1234", "validity_date": "2026-10-20", "type": "placa", "base64": "..."},
-    ]
-    """
-    from sqlalchemy import or_
-    
-    stmt = (
-        select(WebhookEvent)
-        .where(
-            WebhookEvent.drive_file_id.is_(None),
-            or_(
-                WebhookEvent.webhook_type == "PESQUISACONCULTA",
-                WebhookEvent.webhook_type.in_(["CHECKLIST", "RESULTADOCHECKLIST"])
-            )
-        )
-    )
-    result = await session.execute(stmt)
-    events = result.scalars().all()
-    
-    records: list[dict[str, Any]] = []
-    
-    for event in events:
-        payload = desanitize_payload(event.payload)
-        
-        identification = None
-        validity_date = None
-        id_type = None
-        base64_data = payload.get("base64")
-        
-        if event.webhook_type == "PESQUISACONCULTA":
-            situation = payload.get("situation")
-            if situation != "AD":
-                continue
-            
-            identification = payload.get("identification")
-            validity_date = payload.get("expiration_date")
-            if payload.get("identification_type") in ("V", "C"):
-                id_type = "placa"
-            else:
-                id_type = "cpf"
-        elif event.webhook_type in ("CHECKLIST", "RESULTADOCHECKLIST"):
-            identification = payload.get("codchecklist")
-            validity_date = payload.get("dataexpiracao")
-            id_type = "placa"
-        
-        if identification and validity_date and base64_data:
-            records.append({
-                "id": event.id,
-                "identification": identification,
-                "validity_date": validity_date,
-                "type": id_type,
-                "base64": base64_data,
-            })
-    
-    return records
-
 
 async def update_drive_file(session: AsyncSession, event_id: int, drive_file_id: str, drive_file_url: str) -> bool:
     """

@@ -30,6 +30,7 @@ from services.search import (
     search_by_placa as search_by_placa_service,
     get_missing_drive_identifications,
     upload_pending_documents,
+    sync_cadastros
 )
 from services.kafka_producer import RasterEventProducer
 from services.webhook_processor import (
@@ -283,6 +284,20 @@ async def upload_pending_documents_endpoint(request: Request):
 
     log_audit_event(
         action="UPLOAD_PENDING_DOCUMENTS",
+        details=result,
+        source_ip=source_ip,
+    )
+    return result
+
+@app.post("/audit/sync-cadastros", tags=["Audit"])
+@limiter.limit(settings.RATE_LIMIT)
+async def sync_cadastros_endpoint(request: Request):
+    source_ip = request.client.host if request.client else None
+    async with get_async_session() as session:
+        result = await sync_cadastros(session)
+
+    log_audit_event(
+        action="SYNC_CADASTROS",
         details=result,
         source_ip=source_ip,
     )
