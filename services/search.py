@@ -172,7 +172,7 @@ async def sync_cadastros(session: AsyncSession) -> dict[str, Any]:
             logger.warning(f"Sem base64: {record['identification']}")
             continue
 
-        raster_type = "V" if record["type"] == "placa" else None
+        raster_type = record.get("identification_type") or None
 
         try:
             await RasterEventProducer.publicar_pesquisa_completed(

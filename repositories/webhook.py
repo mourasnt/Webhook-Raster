@@ -447,6 +447,7 @@ async def get_all_approved_identifications(session: AsyncSession) -> list[dict[s
                 "type": id_type,
                 "base64": base64_data,
                 "drive_file_id": event.drive_file_id,
+                "identification_type": identification_type,
             })
     
     return identifications
